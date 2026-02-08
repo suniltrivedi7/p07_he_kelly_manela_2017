@@ -16,8 +16,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 WRDS_USERNAME = config("WRDS_USERNAME", default="")
 MANUAL_DATA = config('MANUAL_DATA', default=(BASE_DIR / 'data_manual'), cast=Path)
-DATA_DIR = config('DATA_DIR', default=(BASE_DIR / 'my_data'), cast=Path)
-OUTPUT_DIR = config('OUTPUT_DIR', default=(BASE_DIR / 'my_output'), cast=Path)
+DATA_DIR = config('DATA_DIR', default=(BASE_DIR / '_data'), cast=Path)
+OUTPUT_DIR = config('OUTPUT_DIR', default=(BASE_DIR / '_output'), cast=Path)
 START_DATE = config('START_DATE', default='1960-01-01')
 END_DATE = config('END_DATE', default='2012-12-31')
 UPDATED_END_DATE = config('UPDATED_END_DATE', default='2025-01-01')
