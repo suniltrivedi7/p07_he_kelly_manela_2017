@@ -13,6 +13,25 @@ from src import config
 DATA_DIR = config.DATA_DIR
 OUTPUT_DIR = config.OUTPUT_DIR
 
+def task_generate_charts():
+    """
+    Task: Run generate_chart.py to create three CRSP exploratory Plotly charts.
+    """
+    return {
+        "actions": [
+            'ipython -c "import sys; sys.path.insert(0, \'src\'); import generate_chart; generate_chart.main()"'
+        ],
+        "file_dep": [
+            "./src/generate_chart.py"
+        ],
+        "targets": [
+            "_output/crsp_returns_timeseries.html",
+            "_output/crsp_returns_histogram.html",
+            "_output/crsp_rolling_volatility.html"
+        ],
+        "clean": []
+    }
+
 def task_table02_main():
     """
     Task: Run Table02Prep.py to generate Table 2's LaTeX tables and figures.

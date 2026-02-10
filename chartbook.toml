@@ -1,8 +1,76 @@
-[theme]
-logo_path = "assets/logo.png"
-favicon_path = ""
+# =========================
+# Chartbook configuration
+# =========================
 
-[site]
-title = "Blank Project Template"
-author = "Jeremy Bejarano"
-copyright = "2025"
+[config]
+type = "pipeline"
+
+[pipeline]
+id = "crsp_analysis_pipeline"
+name = "CRSP Returns Exploratory Analysis"
+description = "Pipeline for pulling CRSP returns and generating exploratory interactive charts."
+
+
+# =========================
+# Dataframe registration
+# =========================
+
+[dataframes.crsp_returns]
+
+data_sources = ["CRSP"]
+data_providers = ["WRDS"]
+how_is_pulled = "Downloaded via WRDS and stored locally as Excel"
+path_to_parquet_data = "_data/pulled/crsp_return.xlsx"
+date_col = "date"
+
+dataframe_docs_str = """
+CRSP stock return dataset obtained from WRDS.
+
+This dataset contains historical return series used for exploratory analysis.
+It supports the construction of interactive visualizations including a return
+time-series plot, a distribution histogram, and a rolling volatility chart.
+"""
+
+
+# =========================
+# Chart registrations
+# =========================
+
+[charts.crsp_returns_timeseries]
+
+chart_name = "CRSP Returns Time Series"
+short_description_chart = "Exploratory time-series visualization of CRSP returns."
+dataframe_id = "crsp_returns"
+path_to_html_chart = "_output/crsp_returns_timeseries.html"
+
+chart_docs_str = """
+This chart displays the CRSP return series over time.
+It is used as an initial exploratory visualization to confirm
+data integrity, structure, and time indexing.
+"""
+
+
+[charts.crsp_returns_histogram]
+
+chart_name = "CRSP Returns Distribution"
+short_description_chart = "Histogram showing the distribution of CRSP returns."
+dataframe_id = "crsp_returns"
+path_to_html_chart = "_output/crsp_returns_histogram.html"
+
+chart_docs_str = """
+This histogram visualizes the distribution of CRSP returns.
+It helps assess skewness, kurtosis, and the presence of extreme values.
+"""
+
+
+[charts.crsp_rolling_volatility]
+
+chart_name = "CRSP Rolling Volatility"
+short_description_chart = "30-period rolling volatility calculated from CRSP returns."
+dataframe_id = "crsp_returns"
+path_to_html_chart = "_output/crsp_rolling_volatility.html"
+
+chart_docs_str = """
+This chart shows the rolling 30-period standard deviation of CRSP returns.
+It provides a simple measure of time-varying market volatility for exploratory analysis.
+"""
