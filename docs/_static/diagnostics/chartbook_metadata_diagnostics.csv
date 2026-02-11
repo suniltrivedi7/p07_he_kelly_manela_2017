@@ -1,0 +1,6 @@
+Name,Metadata Complete,Object Type,Identifier,Pipeline,Missing Fields,Page Link
+crsp_analysis_pipeline,False,pipeline,crsp_analysis_pipeline,crsp_analysis_pipeline,"pipeline_name, pipeline_description, lead_pipeline_developer, contributors, build_commands, os_compatibility, git_repo_URL, README_file_path",../index.html
+crsp_returns,False,dataframe,crsp_returns,crsp_analysis_pipeline,"dataframe_name, short_description_df, links_to_data_providers, topic_tags",../dataframes/crsp_analysis_pipeline/crsp_returns.html
+CRSP Returns Time Series,False,chart,crsp_returns_timeseries,crsp_analysis_pipeline,"topic_tags, data_frequency, observation_period, lag_in_data_release, data_release_timing, units",../charts/crsp_analysis_pipeline.crsp_returns_timeseries.html
+CRSP Returns Distribution,False,chart,crsp_returns_histogram,crsp_analysis_pipeline,"topic_tags, data_frequency, observation_period, lag_in_data_release, data_release_timing, units",../charts/crsp_analysis_pipeline.crsp_returns_histogram.html
+CRSP Rolling Volatility,False,chart,crsp_rolling_volatility,crsp_analysis_pipeline,"topic_tags, data_frequency, observation_period, lag_in_data_release, data_release_timing, units",../charts/crsp_analysis_pipeline.crsp_rolling_volatility.html
