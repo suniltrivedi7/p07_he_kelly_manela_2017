@@ -249,27 +249,297 @@ def pull_shiller_pe(url=URL_SHILLER, data_dir=DATA_DIR):
         print(f"Error downloading or saving the Shiller PE data: {e}")
         raise
 
+def _extract_cape_columns(file_path):
+    """
+    Load the Shiller 'Data' sheet and return a two-column DataFrame [date, cape]
+    where cape is the Cyclically Adjusted P/E ratio (P/E10).
+
+    Strategy
+    --------
+    1. Load all columns (no usecols filter) so we can inspect headers.
+    2. Search for a column whose header contains 'CAPE' or 'PE10' (case-insensitive).
+    3. Fall back to the 13th column (Excel column M, 0-indexed position 12) if no
+       named match is found — this was the original assumption.
+    4. Validate that the selected column looks like a P/E ratio (median value > 1);
+       if the median is ≤ 1 the column is already an E/P yield, so skip the inversion
+       in calculate_ep() by storing it as 'ep_direct'.
+    """
+    df = pd.read_excel(file_path, sheet_name='Data', skiprows=7)
+    df = df.dropna(how='all')
+
+    date_col = df.columns[0]
+
+    # Search for CAPE by header name
+    cape_col = None
+    for col in df.columns:
+        if str(col).strip().upper() in ('CAPE', 'P/E10', 'PE10', 'CAPE10'):
+            cape_col = col
+            break
+
+    if cape_col is None:
+        # Fallback: original assumption — column M (0-indexed 12)
+        if len(df.columns) > 12:
+            cape_col = df.columns[12]
+        else:
+            raise ValueError(
+                f"Cannot find CAPE column in Shiller spreadsheet. "
+                f"Available columns: {list(df.columns)}"
+            )
+
+    result = df[[date_col, cape_col]].copy()
+    result.columns = ['date', 'cape']
+
+    # Sanity check: CAPE values should be >> 1 (typically 5–50).
+    # If median is ≤ 1 the column is already an earnings yield (E/P), not P/E10.
+    numeric = pd.to_numeric(result['cape'], errors='coerce').dropna()
+    if not numeric.empty and numeric.median() <= 1.0:
+        print(
+            f"WARNING: Shiller column '{cape_col}' has median {numeric.median():.4f}, "
+            "which looks like an E/P yield rather than a P/E ratio. "
+            "Storing as 'ep_direct' — calculate_ep() will use it directly instead of inverting."
+        )
+        result = result.rename(columns={'cape': 'ep_direct'})
+
+    return result
+
+
 def load_shiller_pe(url=URL_SHILLER, data_dir=DATA_DIR, from_cache=True):
     """
     Load Shiller P/E data from cache or pull it if cache is not available.
-    
+
     Parameters:
       url (str): URL for Shiller's P/E data.
       data_dir (Path): Directory containing the cached file.
       from_cache (bool): Whether to load from cache.
-    
+
     Returns:
-      DataFrame with Shiller P/E data.
+      DataFrame with Shiller P/E data (columns: date + either 'cape' or 'ep_direct').
     """
     file_path = data_dir / "pulled" / "shiller_pe.xlsx"
     if from_cache and file_path.exists():
         print("Loading data from cache.")
-        df = pd.read_excel(file_path, sheet_name='Data', skiprows=7, usecols="A,M")
     else:
         print("Cache not found, pulling data...")
         pull_shiller_pe(url, data_dir)
-        df = pd.read_excel(file_path, sheet_name='Data', skiprows=7, usecols="A,M")
-    return df
+    return _extract_cape_columns(file_path)
+
+def load_foreign_dealers(fname='Primary_Dealer_Link_Table3_FOREIGN.csv'):
+    """
+    Load the foreign primary dealer linking file.
+
+    File: data_manual/Primary_Dealer_Link_Table3_FOREIGN.csv
+    Columns: Primary Dealer, From, To, Parent Company, Country, MNEM
+    Date format: DD/MM/YYYY (European day-first)
+    End date: 'Current Dealer' means the dealer is still active.
+
+    A single primary dealer may appear on multiple rows when it had more than
+    one parent company — these are handled by fetch_data_for_international_tickers().
+
+    Returns
+    -------
+    DataFrame with columns: Primary Dealer, mnem, Start Date, End Date,
+    Parent Company, Country — all rows with a non-empty MNEM.
+    """
+    file_path = config.MANUAL_DATA / fname
+    if not file_path.exists():
+        print(f"Foreign dealer file not found: {file_path}")
+        return pd.DataFrame()
+
+    dealers = pd.read_csv(file_path)
+    dealers = dealers.rename(columns={'From': 'Start Date', 'To': 'End Date', 'MNEM': 'mnem'})
+    dealers = dealers.dropna(subset=['mnem'])
+    dealers = dealers[dealers['mnem'].str.strip() != '']
+
+    # 'Current Dealer' means no end date — treat the same as a blank End Date
+    dealers['End Date'] = dealers['End Date'].replace('Current Dealer', None)
+
+    # Parse start dates: DD/MM/YYYY
+    dealers['Start Date'] = pd.to_datetime(
+        dealers['Start Date'], dayfirst=True, errors='coerce'
+    ).dt.strftime('%m/%d/%Y')
+
+    # Parse end dates where present; fill blanks with the sentinel 'Current'
+    mask_dated = dealers['End Date'].notna()
+    dealers.loc[mask_dated, 'End Date'] = pd.to_datetime(
+        dealers.loc[mask_dated, 'End Date'], dayfirst=True, errors='coerce'
+    ).dt.strftime('%m/%d/%Y')
+    dealers['End Date'] = dealers['End Date'].fillna('Current')
+
+    return dealers.reset_index(drop=True)
+
+
+def _fetch_intl_financial_data(mnem, start_date, end_date, db):
+    """
+    Pull annual balance-sheet fundamentals from WRDS Worldscope for a single
+    international company identified by its Datastream MNEM code.
+
+    Worldscope item codes used
+    --------------------------
+    item6100  Datastream code (MNEM) — company identifier
+    item6001  Fiscal year (integer, e.g. 2005)
+    item2999  WC02999: Total Assets (millions, reporting currency)
+    item3501  WC03501: Common Equity (millions, reporting currency)
+    item8001  WC08001: Market Capitalisation (millions, reporting currency)
+
+    NOTE — schema verification
+    --------------------------
+    WRDS may expose Worldscope under a different schema name depending on your
+    institution's subscription. If this query fails, run:
+        db.list_schemas()
+        db.list_tables(library='worldscope')
+    to find the correct schema and table name, then update the FROM clause below.
+
+    NOTE — currency
+    ---------------
+    Worldscope values are in the company's reporting currency. When these rows
+    are summed with USD-denominated domestic data in prep_dataset(), the ratios
+    (market_cap_ratio, book_cap_ratio) will be approximately correct only if the
+    international company's reporting currency is close to USD, or if the
+    company's balance sheet is small relative to the US aggregate. For higher
+    accuracy, apply FX conversion before concatenation.
+
+    Parameters
+    ----------
+    mnem       : str   Datastream MNEM, e.g. 'H:AAB'
+    start_date : str   'MM/DD/YYYY'
+    end_date   : str   'MM/DD/YYYY' or 'Current'
+    db         : wrds.Connection
+
+    Returns
+    -------
+    DataFrame with columns: datafqtr, total_assets, book_debt, book_equity,
+    market_equity, gvkey (0), conm (mnem) — quarterly frequency via forward-fill.
+    Empty DataFrame if no data found or query fails.
+    """
+    if not mnem or pd.isna(mnem):
+        return pd.DataFrame()
+
+    if end_date == 'Current':
+        end_date = datetime.today().strftime('%m/%d/%Y')
+
+    start_year = pd.to_datetime(start_date).year
+    end_year = pd.to_datetime(end_date).year
+
+    query = f"""
+        SELECT item6001 AS fiscal_year,
+               item2999 AS total_assets,
+               item3501 AS book_equity,
+               item8001 AS market_equity
+        FROM worldscope.wrds_ws_funda
+        WHERE item6100 = '{mnem}'
+          AND item6001 BETWEEN {start_year} AND {end_year}
+        ORDER BY item6001
+    """
+    try:
+        data = db.raw_sql(query)
+    except Exception as e:
+        print(f"Worldscope query failed for {mnem}: {e}")
+        print("  Check schema/table name — see NOTE in _fetch_intl_financial_data docstring.")
+        return pd.DataFrame()
+
+    if data.empty:
+        print(f"No Worldscope data found for {mnem} ({start_year}–{end_year})")
+        return pd.DataFrame()
+
+    # book_debt mirrors the domestic Compustat formula: atq - ceqq = total liabilities
+    data['book_debt'] = data['total_assets'] - data['book_equity']
+    data = data.dropna(subset=['total_assets', 'book_equity', 'market_equity'])
+
+    return _annual_to_quarterly(data, mnem)
+
+
+def _annual_to_quarterly(annual_df, mnem):
+    """
+    Forward-fill annual (fiscal year-end) balance-sheet data to quarterly frequency.
+
+    Each year's values are assigned to Q4 of that year, then carried forward
+    into Q1–Q3 of the following year until the next year-end report arrives.
+    This matches the user-selected interpolation strategy.
+
+    Returns DataFrame with columns: datafqtr, total_assets, book_debt,
+    book_equity, market_equity, gvkey (0), conm (mnem).
+    """
+    annual_df = annual_df.copy()
+    # Assign December 31 as the year-end date for each fiscal year
+    annual_df['date'] = pd.to_datetime(
+        annual_df['fiscal_year'].astype(int).astype(str) + '-12-31'
+    )
+    annual_df = annual_df.set_index('date').sort_index()
+    value_cols = ['total_assets', 'book_debt', 'book_equity', 'market_equity']
+    annual_df = annual_df[value_cols]
+
+    # Resample to quarter-end; year-end lands on Q4, forward-fill the rest
+    quarterly = annual_df.resample('QE').last().ffill()
+
+    # Convert index to datafqtr string "YYYYQ#" to match domestic Compustat format
+    quarterly['datafqtr'] = quarterly.index.to_period('Q').map(
+        lambda p: f"{p.year}Q{p.quarter}"
+    )
+    # Add dummy columns so dropna() in prep_dataset() does not discard these rows
+    quarterly['gvkey'] = 0
+    quarterly['conm'] = mnem
+
+    return quarterly.reset_index(drop=True)
+
+
+def fetch_data_for_international_tickers(ticks, db):
+    """
+    Fetch Worldscope financial data for a list of international primary dealers.
+
+    Mirrors fetch_data_for_tickers() for domestic dealers, returning data in
+    the same column format so the two DataFrames can be concatenated directly.
+
+    Multi-parent handling
+    --------------------
+    A dealer with multiple rows in the FOREIGN file (one per parent company)
+    is handled by fetching each parent's quarterly time series independently,
+    then averaging the four balance-sheet columns (total_assets, book_debt,
+    book_equity, market_equity) across parents for each quarter.  Quarters
+    where only a subset of parents have data still contribute — the average
+    is taken over however many parents returned data for that quarter.
+
+    Parameters
+    ----------
+    ticks : DataFrame with columns 'Primary Dealer', 'mnem', 'Start Date', 'End Date'
+    db    : wrds.Connection
+
+    Returns
+    -------
+    prim_dealers  : DataFrame — combined quarterly data for all found dealers
+    empty_tickers : list of MNEMs for which no data was retrieved
+    """
+    VALUE_COLS = ['total_assets', 'book_debt', 'book_equity', 'market_equity']
+    empty_tickers = []
+    prim_dealers = pd.DataFrame()
+
+    for dealer_name, group in ticks.groupby('Primary Dealer', sort=False):
+        parent_frames = []
+
+        for _, row in group.iterrows():
+            mnem = row['mnem']
+            data = _fetch_intl_financial_data(mnem, row['Start Date'], row['End Date'], db)
+            if data.empty:
+                empty_tickers.append(mnem)
+            else:
+                parent_frames.append(data)
+
+        if not parent_frames:
+            continue
+
+        if len(parent_frames) == 1:
+            dealer_data = parent_frames[0]
+        else:
+            # Average balance-sheet values across parent companies per quarter
+            combined = pd.concat(parent_frames, axis=0, ignore_index=True)
+            averaged = combined.groupby('datafqtr')[VALUE_COLS].mean().reset_index()
+            averaged['gvkey'] = 0
+            averaged['conm'] = dealer_name
+            dealer_data = averaged
+
+        prim_dealers = pd.concat([prim_dealers, dealer_data], axis=0, ignore_index=True)
+
+    return prim_dealers, empty_tickers
+
 
 def pull_CRSP_Value_Weighted_Index(db, data_dir=DATA_DIR, from_cache=True, start_date=config.START_DATE, end_date=None):
     """
