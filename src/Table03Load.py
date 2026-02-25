@@ -249,27 +249,79 @@ def pull_shiller_pe(url=URL_SHILLER, data_dir=DATA_DIR):
         print(f"Error downloading or saving the Shiller PE data: {e}")
         raise
 
+def _extract_cape_columns(file_path):
+    """
+    Load the Shiller 'Data' sheet and return a two-column DataFrame [date, cape]
+    where cape is the Cyclically Adjusted P/E ratio (P/E10).
+
+    Strategy
+    --------
+    1. Load all columns (no usecols filter) so we can inspect headers.
+    2. Search for a column whose header contains 'CAPE' or 'PE10' (case-insensitive).
+    3. Fall back to the 13th column (Excel column M, 0-indexed position 12) if no
+       named match is found — this was the original assumption.
+    4. Validate that the selected column looks like a P/E ratio (median value > 1);
+       if the median is ≤ 1 the column is already an E/P yield, so skip the inversion
+       in calculate_ep() by storing it as 'ep_direct'.
+    """
+    df = pd.read_excel(file_path, sheet_name='Data', skiprows=7)
+    df = df.dropna(how='all')
+
+    date_col = df.columns[0]
+
+    # Search for CAPE by header name
+    cape_col = None
+    for col in df.columns:
+        if str(col).strip().upper() in ('CAPE', 'P/E10', 'PE10', 'CAPE10'):
+            cape_col = col
+            break
+
+    if cape_col is None:
+        # Fallback: original assumption — column M (0-indexed 12)
+        if len(df.columns) > 12:
+            cape_col = df.columns[12]
+        else:
+            raise ValueError(
+                f"Cannot find CAPE column in Shiller spreadsheet. "
+                f"Available columns: {list(df.columns)}"
+            )
+
+    result = df[[date_col, cape_col]].copy()
+    result.columns = ['date', 'cape']
+
+    # Sanity check: CAPE values should be >> 1 (typically 5–50).
+    # If median is ≤ 1 the column is already an earnings yield (E/P), not P/E10.
+    numeric = pd.to_numeric(result['cape'], errors='coerce').dropna()
+    if not numeric.empty and numeric.median() <= 1.0:
+        print(
+            f"WARNING: Shiller column '{cape_col}' has median {numeric.median():.4f}, "
+            "which looks like an E/P yield rather than a P/E ratio. "
+            "Storing as 'ep_direct' — calculate_ep() will use it directly instead of inverting."
+        )
+        result = result.rename(columns={'cape': 'ep_direct'})
+
+    return result
+
+
 def load_shiller_pe(url=URL_SHILLER, data_dir=DATA_DIR, from_cache=True):
     """
     Load Shiller P/E data from cache or pull it if cache is not available.
-    
+
     Parameters:
       url (str): URL for Shiller's P/E data.
       data_dir (Path): Directory containing the cached file.
       from_cache (bool): Whether to load from cache.
-    
+
     Returns:
-      DataFrame with Shiller P/E data.
+      DataFrame with Shiller P/E data (columns: date + either 'cape' or 'ep_direct').
     """
     file_path = data_dir / "pulled" / "shiller_pe.xlsx"
     if from_cache and file_path.exists():
         print("Loading data from cache.")
-        df = pd.read_excel(file_path, sheet_name='Data', skiprows=7, usecols="A,M")
     else:
         print("Cache not found, pulling data...")
         pull_shiller_pe(url, data_dir)
-        df = pd.read_excel(file_path, sheet_name='Data', skiprows=7, usecols="A,M")
-    return df
+    return _extract_cape_columns(file_path)
 
 def load_foreign_dealers(fname='Primary_Dealer_Link_Table3_FOREIGN.csv'):
     """
