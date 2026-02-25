@@ -990,7 +990,7 @@ def convert_and_export_table_to_latex(formatted_table, UPDATED=False):
 def main(UPDATED=False):
     db = wrds.Connection(wrds_username=config.WRDS_USERNAME)
 
-    merged_main = clean_primary_dealers_data(fname="Primary_Dealer_Link_Table3.csv")
+    merged_main = clean_primary_dealers_data(fname="Primary_Dealer_Link_Table3_DOMESTIC.csv")
     link_hist = load_link_table(fname="updated_linktable.csv")
 
     end_for_ccm = config.END_DATE if not UPDATED else config.UPDATED_END_DATE
