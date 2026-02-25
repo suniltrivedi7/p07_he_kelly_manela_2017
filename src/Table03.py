@@ -59,7 +59,8 @@ def prep_dataset(dataset, UPDATED=False):
     """
     dataset = dataset.drop_duplicates()
     dataset['datafqtr'] = dataset['datafqtr'].apply(quarter_to_date)
-    dataset = dataset.dropna()
+    # Use subset so international rows (which lack gvkey/conm) are not dropped
+    dataset = dataset.dropna(subset=['datafqtr', 'total_assets', 'book_debt', 'book_equity', 'market_equity'])
     aggregated_dataset = dataset.groupby('datafqtr').agg({
         'total_assets': 'sum',
         'book_debt': 'sum',
@@ -419,8 +420,19 @@ def main(UPDATED=False):
     merges with macro variables, and exports summary statistics, figures, and correlation matrices.
     """
     db = wrds.Connection(wrds_username=config.WRDS_USERNAME)
-    prim_dealers = Table02Prep.clean_primary_dealers_data(fname='Primary_Dealer_Link_Table3.csv')
+
+    # --- Domestic primary dealers (gvkey-identified, queried via Compustat) ---
+    prim_dealers = Table02Prep.clean_primary_dealers_data(fname='Primary_Dealer_Link_Table3_DOMESTIC.csv')
     dataset, _ = Table03Load.fetch_data_for_tickers(prim_dealers, db)
+
+    # --- Foreign primary dealers (MNEM-identified, queried via Worldscope) ---
+    foreign_dealers = Table03Load.load_foreign_dealers()
+    if not foreign_dealers.empty:
+        foreign_dataset, foreign_empty = Table03Load.fetch_data_for_international_tickers(foreign_dealers, db)
+        if foreign_empty:
+            print(f"No Worldscope data found for MNEMs: {foreign_empty}")
+        if not foreign_dataset.empty:
+            dataset = pd.concat([dataset, foreign_dataset], axis=0, ignore_index=True)
     prep_datast = prep_dataset(dataset, UPDATED=UPDATED)
     ratio_dataset = aggregate_ratios(prep_datast)
     factors_dataset = convert_ratios_to_factors(ratio_dataset)

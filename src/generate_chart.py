@@ -1,6 +1,8 @@
 # src/generate_chart.py
 
+import sys
 from pathlib import Path
+
 import pandas as pd
 import plotly.express as px
 
@@ -10,8 +12,21 @@ OUTPUT_DIR = Path("_output")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 
+def _pull_and_cache_crsp():
+    """Pull CRSP monthly index returns from WRDS and cache as crsp_return.xlsx."""
+    sys.path.insert(0, str(Path(__file__).parent))
+    from pull_CRSP_stock import pull_CRSP_index_files
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    df = pull_CRSP_index_files()
+    df = df[["caldt", "vwretd"]].rename(columns={"caldt": "date"})
+    df = df.dropna(subset=["vwretd"])
+    df.to_excel(DATA_DIR / "crsp_return.xlsx", index=False)
+    return df
+
+
 def load_crsp():
-    """Load CRSP returns from Excel file."""
+    """Load CRSP returns from Excel file, pulling from WRDS if not cached."""
     xlsx = DATA_DIR / "crsp_return.xlsx"
     xls = DATA_DIR / "crsp_return.xls"
 
@@ -20,7 +35,7 @@ def load_crsp():
     elif xls.exists():
         df = pd.read_excel(xls)
     else:
-        raise FileNotFoundError("CRSP return file not found in _data/pulled")
+        df = _pull_and_cache_crsp()
 
     # Attempt to standardize columns
     df = df.dropna(how="all")
