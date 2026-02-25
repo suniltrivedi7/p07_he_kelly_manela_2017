@@ -61,6 +61,10 @@ def prep_dataset(dataset, UPDATED=False):
     dataset['datafqtr'] = dataset['datafqtr'].apply(quarter_to_date)
     # Use subset so international rows (which lack gvkey/conm) are not dropped
     dataset = dataset.dropna(subset=['datafqtr', 'total_assets', 'book_debt', 'book_equity', 'market_equity'])
+    # Exclude rows where market_equity is zero — these indicate a missing/zero stock price
+    # in Compustat (prccq = 0) rather than a genuine zero market cap, and would pull the
+    # aggregate market capital ratio toward the book capital ratio.
+    dataset = dataset[dataset['market_equity'] > 0]
     aggregated_dataset = dataset.groupby('datafqtr').agg({
         'total_assets': 'sum',
         'book_debt': 'sum',
@@ -190,17 +194,23 @@ def convert_ratios_to_factors(data):
 def calculate_ep(shiller_cape):
     """
     Process Shiller CAPE data to calculate the earnings-to-price (E/P) ratio.
-    Input: shiller_cape (DataFrame) with columns for date and CAPE.
-    Output: DataFrame with an additional 'e/p' column computed as 1 / CAPE, with date as index.
+
+    Input: shiller_cape (DataFrame) returned by load_shiller_pe().
+      - If it contains a 'cape' column (P/E10), E/P = 1 / CAPE.
+      - If it contains an 'ep_direct' column (already E/P), use it as-is.
+    Output: DataFrame with an 'e/p' column, date as index.
     The date is parsed using the format '%Y.%m' and adjusted to month end.
     """
     df = shiller_cape.copy()
-    df.columns = ['date', 'cape']
     df['date'] = df['date'].astype(str)
-    df['date'] = pd.to_datetime(df['date'], format='%Y.%m') + pd.offsets.MonthEnd(0)
+    df['date'] = pd.to_datetime(df['date'], format='%Y.%m', errors='coerce') + pd.offsets.MonthEnd(0)
+    df = df.dropna(subset=['date'])
     df = df.set_index('date')
-    df['e/p'] = 1 / df['cape']
-    return df
+    if 'ep_direct' in df.columns:
+        df['e/p'] = pd.to_numeric(df['ep_direct'], errors='coerce')
+    else:
+        df['e/p'] = 1 / pd.to_numeric(df['cape'], errors='coerce')
+    return df[['e/p']]
 
 def macro_variables(db, from_cache=True, UPDATED=False):
     """
@@ -232,7 +242,9 @@ def macro_variables(db, from_cache=True, UPDATED=False):
         end_date_ff = config.END_DATE
     ff_facs = Table03Load.fetch_ff_factors(start_date=config.START_DATE.replace("-", ""),
                                            end_date=end_date_ff.replace("-", ""))
-    ff_facs_quarterly = ff_facs.to_timestamp(freq='M').resample('QE').last()
+    ff_facs_quarterly = ff_facs.to_timestamp(freq='M').resample('QE').apply(
+        lambda x: (1 + x).prod() - 1
+    )
 
     # Load the CRSP value-weighted index data and convert the date column to datetime
     value_wtd_indx = Table03Load.pull_CRSP_Value_Weighted_Index(db)
@@ -262,12 +274,12 @@ def create_panelA(ratios, macro):
         'book_cap_ratio': 'Book capital',
         'aem_leverage': 'AEM leverage'
     })
-    macro = macro[['e/p', 'unemp_rate', 'nfci', 'real_gdp_growth_calc', 'mkt_ret', 'mkt_vol']]
+    macro = macro[['e/p', 'unemp_rate', 'nfci', 'real_gdp', 'mkt_ret', 'mkt_vol']]
     macro_renamed = macro.rename(columns={
         'e/p': 'E/P',
         'unemp_rate': 'Unemployment',
         'nfci': 'Financial conditions',
-        'real_gdp_growth_calc': 'GDP',
+        'real_gdp': 'GDP',
         'mkt_ret': 'Market excess return',
         'mkt_vol': 'Market volatility'
     })
@@ -291,6 +303,9 @@ def create_panelB(factors, macro):
         'aem_leverage_factor': 'AEM leverage factor'
     })
     macro_growth = np.log((macro / macro.shift(1).replace(0, np.nan)).replace(0, np.nan))
+    # NFCI is centred at zero and can be negative; log-ratio produces NaN on sign changes.
+    # Use first-difference (absolute change) instead.
+    macro_growth['nfci'] = macro['nfci'].diff()
     macro_growth = macro_growth.fillna(0)
     macro_growth = macro_growth.loc['1970-01-01':]
     macro_growth['mkt_ret'] = macro['mkt_ret']
