@@ -20,6 +20,7 @@ import numpy as np
 
 from statsmodels.tsa.ar_model import AutoReg
 from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.filters.hp_filter import hpfilter
 
 import Table03Load
 import importlib
@@ -72,18 +73,24 @@ def prep_dataset(dataset, UPDATED=False):
         'market_equity': 'sum'
     }).reset_index()
     
+    print(f"\n[PREP] PD firm-quarters after dropna/market_equity>0: {len(dataset)}")
+    print(f"[PREP] Unique gvkeys in raw data: {dataset['gvkey'].nunique() if 'gvkey' in dataset.columns else 'N/A'}")
+    print(f"[PREP] Quarterly sector totals before BD merge: {len(aggregated_dataset)} quarters")
     bd_financials_combined = combine_bd_financials(UPDATED=UPDATED)
     aggregated_dataset = aggregated_dataset.merge(bd_financials_combined, left_on='datafqtr', right_index=True)
     if not UPDATED:
         aggregated_dataset = aggregated_dataset[
-            (aggregated_dataset['datafqtr'] >= "1970-01-01") & 
+            (aggregated_dataset['datafqtr'] >= "1970-01-01") &
             (aggregated_dataset['datafqtr'] <= config.END_DATE)
         ]
     else:
         aggregated_dataset = aggregated_dataset[
-            (aggregated_dataset['datafqtr'] >= "1970-01-01") & 
+            (aggregated_dataset['datafqtr'] >= "1970-01-01") &
             (aggregated_dataset['datafqtr'] <= config.UPDATED_END_DATE)
         ]
+    print(f"[PREP] After date filter and BD merge: {len(aggregated_dataset)} quarters")
+    if len(aggregated_dataset):
+        print(f"[PREP] Sample: {aggregated_dataset['datafqtr'].min().date()} to {aggregated_dataset['datafqtr'].max().date()}")
     return aggregated_dataset
 
 def calculate_ratios(data):
@@ -101,49 +108,6 @@ def calculate_ratios(data):
     return data
 
 
-# def process_financial_data(dataset, UPDATED=False):
-#     """
-#     Process the raw financial dataset by cleaning, aggregating, and calculating key financial ratios.
-    
-#     Output: Aggregated DataFrame with total_assets, book_debt per quarter, 
-#     along with properly computed market_cap_ratio and book_cap_ratio.
-#     """
-#     dataset = dataset.drop_duplicates()
-#     dataset['datafqtr'] = dataset['datafqtr'].apply(quarter_to_date)
-
-#     # **个体比率计算**
-#     dataset['market_cap_ratio'] = dataset['market_equity'] / (dataset['book_debt'] + dataset['market_equity'])
-#     dataset['book_cap_ratio'] = dataset['book_equity'] / (dataset['book_debt'] + dataset['book_equity'])
-
-#     dataset['market_cap_ratio'] = dataset['market_cap_ratio'].fillna(0)
-#     dataset['book_cap_ratio'] = dataset['book_cap_ratio'].fillna(0)
-#     # **计算总资产、债务**
-#     aggregated_dataset = dataset.groupby('datafqtr').agg({
-#         'total_assets': 'sum',
-#         'book_debt': 'sum'
-#     }).reset_index()
-
-#     # **市值加权 market_cap_ratio**
-#     aggregated_dataset['market_cap_ratio'] = dataset.groupby('datafqtr').apply(
-#         lambda x: np.average(x['market_cap_ratio'], weights=x['market_equity'])
-#         if x['market_equity'].sum() > 0 else np.nan
-#     ).values
-
-#     # **等权 book_cap_ratio**
-#     aggregated_dataset['book_cap_ratio'] = dataset.groupby('datafqtr')['book_cap_ratio'].mean().values
-
-#     # **合并 broker-dealer 数据**
-#     bd_financials_combined = combine_bd_financials(UPDATED=UPDATED).reset_index()
-#     aggregated_dataset = aggregated_dataset.merge(bd_financials_combined, on='datafqtr')
-
-#     # **计算 aem_leverage**
-#     aggregated_dataset['aem_leverage'] = aggregated_dataset['bd_fin_assets'] / (
-#         aggregated_dataset['bd_fin_assets'].replace(0, np.nan) - aggregated_dataset['bd_liabilities']
-#     )
-
-#     return aggregated_dataset
-
-
 def aggregate_ratios(data):
     """
     Aggregates the calculated financial ratios and sets the date as the index.
@@ -156,6 +120,9 @@ def aggregate_ratios(data):
     data = data[['datafqtr', 'market_cap_ratio', 'book_cap_ratio', 'aem_leverage']]
     data.rename(columns={'datafqtr': 'date'}, inplace=True)
     data = data.set_index('date')
+    print(f"\n[RATIOS] Quarters in ratio series: {len(data)}")
+    print(f"[RATIOS] Date range: {data.index.min().date()} to {data.index.max().date()}")
+    print(data[['market_cap_ratio', 'book_cap_ratio', 'aem_leverage']].describe().round(4).to_string())
     return data
 
 def convert_ratios_to_factors(data):
@@ -189,7 +156,13 @@ def convert_ratios_to_factors(data):
     decomposition = seasonal_decompose(factors_df['leverage_growth'], model='additive', period=4)
     factors_df['aem_leverage_factor'] = factors_df['leverage_growth'] - decomposition.seasonal
 
-    return factors_df[['market_capital_factor', 'book_capital_factor', 'aem_leverage_factor']]
+    result = factors_df[['market_capital_factor', 'book_capital_factor', 'aem_leverage_factor']]
+    print(f"\n[FACTORS] Date range: {result.index.min().date()} to {result.index.max().date()}")
+    print(f"[FACTORS] Non-null counts: market_capital_factor={result['market_capital_factor'].notna().sum()}, "
+          f"book_capital_factor={result['book_capital_factor'].notna().sum()}, "
+          f"aem_leverage_factor={result['aem_leverage_factor'].notna().sum()}")
+    print(result.describe().round(4).to_string())
+    return result
 
 def calculate_ep(shiller_cape):
     """
@@ -255,26 +228,46 @@ def macro_variables(db, from_cache=True, UPDATED=False):
     log_returns = value_wtd_indx.set_index('date')['vwretd']
     annual_vol_quarterly = log_returns.groupby(pd.Grouper(freq='QE')).std().rename('mkt_vol')
 
+    print(f"\n[MACRO] Shiller E/P: {shiller_quarterly.index.min().date()} to {shiller_quarterly.index.max().date()} ({len(shiller_quarterly)} quarters)")
+    print(f"[MACRO] FRED (UNRATE/NFCI/GDPC1): {macro_quarterly.index.min().date()} to {macro_quarterly.index.max().date()} ({len(macro_quarterly)} quarters)")
+    print(f"[MACRO]   NFCI non-null: {macro_quarterly['nfci'].notna().sum()} quarters (starts {macro_quarterly['nfci'].first_valid_index().date() if macro_quarterly['nfci'].notna().any() else 'N/A'})")
+    print(f"[MACRO] FF factors (mkt_ret): {ff_facs_quarterly.index.min().date()} to {ff_facs_quarterly.index.max().date()} ({len(ff_facs_quarterly)} quarters)")
+    print(f"[MACRO] CRSP vol: {annual_vol_quarterly.index.min().date()} to {annual_vol_quarterly.index.max().date()} ({len(annual_vol_quarterly)} quarters)")
+
     # Merge all macroeconomic data
     macro_merged = shiller_quarterly.merge(macro_quarterly, left_index=True, right_index=True, how='left')
     macro_merged = macro_merged.merge(ff_facs_quarterly[['mkt_ret']], left_index=True, right_index=True)
     macro_merged = macro_merged.merge(annual_vol_quarterly, left_index=True, right_index=True)
 
+    print(f"[MACRO] After merge: {len(macro_merged)} quarters, {macro_merged.index.min().date()} to {macro_merged.index.max().date()}")
+    print(f"[MACRO] Non-null counts per column:\n{macro_merged.notna().sum().to_string()}")
     return macro_merged
 
-def create_panelA(ratios, macro):
+def create_panelA(ratios, macro, UPDATED=False):
     """
     Creates Panel A for Table 03 by merging financial ratios with macroeconomic variables.
-    Input: ratios (DataFrame with financial ratios) and macro (DataFrame with macro data).
+    Input: ratios (DataFrame with financial ratios), macro (DataFrame with macro data),
+           and UPDATED flag (False → 1970Q1-2012Q4; True → 1970Q1-UPDATED_END_DATE).
     Output: A DataFrame for Panel A with columns for Market capital, Book capital, AEM leverage, and selected macro variables.
-    This panel includes data from 1970-01-01 onward.
-    """ 
+    """
     ratios_renamed = ratios.rename(columns={
         'market_cap_ratio': 'Market capital',
         'book_cap_ratio': 'Book capital',
         'aem_leverage': 'AEM leverage'
     })
-    macro = macro[['e/p', 'unemp_rate', 'nfci', 'real_gdp', 'mkt_ret', 'mkt_vol']]
+    macro = macro[['e/p', 'unemp_rate', 'nfci', 'real_gdp', 'mkt_ret', 'mkt_vol']].copy()
+    # HP-filter log real GDP (lambda=1600, standard for quarterly data).
+    # Raw log-level GDPC1 still trends from ~8.3 to ~9.7 over 1970-2012; any two
+    # trended series produce spuriously high positive correlations regardless of
+    # log-transformation.  The HP cyclical component removes the secular trend,
+    # leaving a stationary, zero-centered series that captures the business cycle.
+    # This is the representation consistent with the paper's GDP correlation of
+    # +0.18/+0.32/-0.23 rather than our pre-fix +0.54/+0.74/+0.67.
+    log_gdp = np.log(macro['real_gdp']).dropna()
+    hp_cycle, _ = hpfilter(log_gdp, lamb=1600)
+    macro['real_gdp'] = hp_cycle.reindex(macro.index)
+    print(f"[PANEL A] GDP: using HP-cycle of log(real_gdp), lambda=1600. "
+          f"Range: {macro['real_gdp'].dropna().min():.4f} to {macro['real_gdp'].dropna().max():.4f}")
     macro_renamed = macro.rename(columns={
         'e/p': 'E/P',
         'unemp_rate': 'Unemployment',
@@ -287,28 +280,42 @@ def create_panelA(ratios, macro):
     ordered_columns = ['Market capital', 'Book capital', 'AEM leverage',
                        'E/P', 'Unemployment', 'Financial conditions', 'GDP', 'Market excess return', 'Market volatility']
     panelA = panelA[ordered_columns]
-    panelA = panelA.loc['1970-01-01':]
+    # Apply sample bounds: 1970Q1 lower bound; 2012Q4 (config.END_DATE) upper bound unless UPDATED.
+    end_bound = config.UPDATED_END_DATE if UPDATED else config.END_DATE
+    panelA = panelA.loc['1970-01-01':end_bound]
+    print(f"\n[PANEL A] Shape: {panelA.shape}  ({panelA.index.min().date()} to {panelA.index.max().date()})")
+    print(f"[PANEL A] Non-null counts:\n{panelA.notna().sum().to_string()}")
     return panelA
 
-def create_panelB(factors, macro):
+def create_panelB(factors, macro, UPDATED=False):
     """
     Creates Panel B for Table 03 by merging analytical factors with macroeconomic variable growth rates.
-    Input: factors (DataFrame with analytical factors) and macro (DataFrame with macro data).
+    Input: factors (DataFrame with analytical factors), macro (DataFrame with macro data),
+           and UPDATED flag (False → 1970Q1-2012Q4; True → 1970Q1-UPDATED_END_DATE).
     Output: A DataFrame for Panel B with growth rate columns for the factors and macro variables.
-    Only data from 1970-01-01 onward is included.
     """
     factors_renamed = factors.rename(columns={
         'market_capital_factor': 'Market capital factor',
         'book_capital_factor': 'Book capital factor',
         'aem_leverage_factor': 'AEM leverage factor'
     })
-    macro_growth = np.log((macro / macro.shift(1).replace(0, np.nan)).replace(0, np.nan))
+    macro_growth = macro.copy()
+    # Log growth for positive, non-zero series
+    for col in ['e/p', 'unemp_rate', 'real_gdp']:
+        macro_growth[col] = np.log(macro[col] / macro[col].shift(1))
     # NFCI is centred at zero and can be negative; log-ratio produces NaN on sign changes.
     # Use first-difference (absolute change) instead.
     macro_growth['nfci'] = macro['nfci'].diff()
-    macro_growth = macro_growth.fillna(0)
-    macro_growth = macro_growth.loc['1970-01-01':]
+    # Market volatility: use pct_change rather than log ratio.
+    # During the 2008 crisis, daily-return vol jumped ~5-10x in a single quarter;
+    # log(vol_t / vol_{t-1}) produces values >2, swamping all other observations
+    # and pulling the correlation coefficient toward zero.  pct_change is on the
+    # same scale and is less sensitive to that single outlier.
+    macro_growth['mkt_vol'] = macro['mkt_vol'].pct_change()
+    # Market excess return: already a return, use directly (not growth-of-return)
     macro_growth['mkt_ret'] = macro['mkt_ret']
+    # Drop any remaining columns not needed (real_gdp_growth_calc etc.)
+    macro_growth = macro_growth.loc['1970-01-01':]
     macro_growth_renamed = macro_growth.rename(columns={
         'e/p': 'E/P growth',
         'unemp_rate': 'Unemployment growth',
@@ -321,7 +328,11 @@ def create_panelB(factors, macro):
     ordered_columns = ['Market capital factor', 'Book capital factor', 'AEM leverage factor',
                        'E/P growth', 'Unemployment growth', 'Financial conditions growth', 'GDP growth', 'Market excess return', 'Market volatility growth']
     panelB = panelB[ordered_columns]
-    panelB = panelB.loc['1970-01-01':]
+    # Apply sample bounds: 1970Q1 lower bound; 2012Q4 (config.END_DATE) upper bound unless UPDATED.
+    end_bound = config.UPDATED_END_DATE if UPDATED else config.END_DATE
+    panelB = panelB.loc['1970-01-01':end_bound]
+    print(f"\n[PANEL B] Shape: {panelB.shape}  ({panelB.index.min().date()} to {panelB.index.max().date()})")
+    print(f"[PANEL B] Non-null counts:\n{panelB.notna().sum().to_string()}")
     return panelB
 
 def format_correlation_matrix(corr_matrix):
@@ -342,13 +353,16 @@ def calculate_correlation_panelA(panelA,UPDATED=False):
     """
     if not UPDATED:
         panelA = panelA[:config.END_DATE]
+    print(f"\n[CORR A] Using {len(panelA)} quarters: {panelA.index.min().date()} to {panelA.index.max().date()}")
     correlation_panelA = format_correlation_matrix(panelA.iloc[:, :3].corr())
     main_cols = panelA[['Market capital', 'Book capital', 'AEM leverage']]
     other_cols = panelA[['E/P', 'Unemployment', 'GDP', 'Financial conditions', 'Market volatility']]
     correlation_results_panelA = pd.DataFrame(index=main_cols.columns)
     for column in other_cols.columns:
         correlation_results_panelA[column] = main_cols.corrwith(other_cols[column])
-    return pd.concat([correlation_panelA, correlation_results_panelA.T], axis=0)
+    result = pd.concat([correlation_panelA, correlation_results_panelA.T], axis=0)
+    print("[CORR A] Correlation matrix:\n" + result.round(2).fillna('').to_string())
+    return result
 
 def calculate_correlation_panelB(panelB,UPDATED=False):
     """
@@ -359,13 +373,16 @@ def calculate_correlation_panelB(panelB,UPDATED=False):
     """
     if not UPDATED:
         panelB = panelB[:config.END_DATE]
+    print(f"\n[CORR B] Using {len(panelB)} quarters: {panelB.index.min().date()} to {panelB.index.max().date()}")
     correlation_panelB = format_correlation_matrix(panelB.iloc[:, :3].corr())
     main_cols = panelB[['Market capital factor', 'Book capital factor', 'AEM leverage factor']]
     other_cols = panelB[['Market excess return', 'E/P growth', 'Unemployment growth', 'GDP growth', 'Financial conditions growth', 'Market volatility growth']]
     correlation_results_panelB = pd.DataFrame(index=main_cols.columns)
     for column in other_cols.columns:
         correlation_results_panelB[column] = main_cols.corrwith(other_cols[column])
-    return pd.concat([correlation_panelB, correlation_results_panelB.T], axis=0)
+    result = pd.concat([correlation_panelB, correlation_results_panelB.T], axis=0)
+    print("[CORR B] Correlation matrix:\n" + result.round(2).fillna('').to_string())
+    return result
 
 def format_final_table(corrA, corrB):
     """
@@ -435,34 +452,76 @@ def main(UPDATED=False):
     merges with macro variables, and exports summary statistics, figures, and correlation matrices.
     """
     db = wrds.Connection(wrds_username=config.WRDS_USERNAME)
+    print(f"\n{'='*60}")
+    print(f"TABLE 03 PIPELINE  (UPDATED={UPDATED})")
+    print(f"Sample target: 1970Q1 – {'2012Q4' if not UPDATED else config.UPDATED_END_DATE}")
+    print(f"{'='*60}")
 
     # --- Domestic primary dealers (gvkey-identified, queried via Compustat) ---
+    print("\n[STEP 1] Loading domestic primary dealers from DOMESTIC CSV...")
     prim_dealers = Table02Prep.clean_primary_dealers_data(fname='Primary_Dealer_Link_Table3_DOMESTIC.csv')
-    dataset, _ = Table03Load.fetch_data_for_tickers(prim_dealers, db)
+
+    # Exclude non-financial conglomerate parents — mirrors Table02Prep.NON_FINANCIAL_PD_GVKEYS.
+    # GE (gvkey 5047, parent of Kidder Peabody 1979-1994) and Sears (gvkey 6307,
+    # parent of Dean Witter 1977-1998) have massive industrial balance sheets that
+    # distort the PD-sector aggregate capital ratios.
+    NON_FINANCIAL_PD_GVKEYS = {5047, 6307}
+    n_before = len(prim_dealers)
+    prim_dealers = prim_dealers[~prim_dealers['gvkey'].isin(NON_FINANCIAL_PD_GVKEYS)]
+    print(f"[STEP 1] Excluded {n_before - len(prim_dealers)} non-financial PD row(s) "
+          f"(gvkeys {NON_FINANCIAL_PD_GVKEYS}); {len(prim_dealers)} rows remain.")
+
+    print(f"[STEP 1] Querying Compustat for {len(prim_dealers)} domestic PD records...")
+    dataset, empty_domestic = Table03Load.fetch_data_for_tickers(prim_dealers, db)
+    print(f"[STEP 1] Domestic firm-quarters fetched: {len(dataset)}")
+    if empty_domestic:
+        print(f"[STEP 1] WARNING — no Compustat data for: {empty_domestic}")
 
     # --- Foreign primary dealers (MNEM-identified, queried via Worldscope) ---
+    print("\n[STEP 2] Loading foreign primary dealers from FOREIGN CSV...")
     foreign_dealers = Table03Load.load_foreign_dealers()
     if not foreign_dealers.empty:
+        print(f"[STEP 2] Querying Worldscope for {len(foreign_dealers)} foreign PD records...")
         foreign_dataset, foreign_empty = Table03Load.fetch_data_for_international_tickers(foreign_dealers, db)
         if foreign_empty:
-            print(f"No Worldscope data found for MNEMs: {foreign_empty}")
+            print(f"[STEP 2] No Worldscope data found for MNEMs: {foreign_empty}")
         if not foreign_dataset.empty:
+            print(f"[STEP 2] Foreign firm-quarters fetched: {len(foreign_dataset)}")
             dataset = pd.concat([dataset, foreign_dataset], axis=0, ignore_index=True)
+        else:
+            print("[STEP 2] No foreign data fetched; proceeding with domestic only.")
+    else:
+        print("[STEP 2] No foreign dealer file found; skipping.")
+
+    print(f"\n[STEP 3] Preparing and aggregating PD data to quarterly sector totals...")
     prep_datast = prep_dataset(dataset, UPDATED=UPDATED)
+
+    print(f"\n[STEP 4] Computing capital ratios (market, book, AEM leverage)...")
     ratio_dataset = aggregate_ratios(prep_datast)
+
+    print(f"\n[STEP 5] Converting ratios to AR(1) factors...")
     factors_dataset = convert_ratios_to_factors(ratio_dataset)
+
+    print(f"\n[STEP 6] Loading macroeconomic variables...")
     macro_dataset = macro_variables(db, UPDATED=UPDATED)
-    panelA = create_panelA(ratio_dataset, macro_dataset)
-    panelB = create_panelB(factors_dataset, macro_dataset)
+
+    print(f"\n[STEP 7] Building Panel A (levels) and Panel B (factors/growth)...")
+    panelA = create_panelA(ratio_dataset, macro_dataset, UPDATED=UPDATED)
+    panelB = create_panelB(factors_dataset, macro_dataset, UPDATED=UPDATED)
     
+    print(f"\n[STEP 8] Computing summary statistics and figures...")
     Table03Analysis.create_summary_stat_table_for_data(panelB, UPDATED=UPDATED)
     Table03Analysis.plot_figure03(ratio_dataset, macro_dataset, UPDATED=UPDATED)
     Table03Analysis.plot_figure02(ratio_dataset, calculate_correlation_panelA(panelA), UPDATED=UPDATED)
-    
+
+    print(f"\n[STEP 9] Computing correlation matrices...")
     correlation_panelA = calculate_correlation_panelA(panelA)
     correlation_panelB = calculate_correlation_panelB(panelB)
     formatted_table = format_final_table(correlation_panelA, correlation_panelB)
     convert_and_export_tables_to_latex(correlation_panelA, correlation_panelB, UPDATED=UPDATED)
+    print(f"\n{'='*60}")
+    print("FINAL TABLE (as formatted for LaTeX):")
+    print(f"{'='*60}")
     print(formatted_table.style.format(na_rep=''))
 
 
