@@ -373,34 +373,22 @@ def _fetch_intl_financial_data(mnem, start_date, end_date, db):
     Pull annual balance-sheet fundamentals from WRDS Worldscope for a single
     international company identified by its Datastream MNEM code.
 
-    Worldscope item codes used
-    --------------------------
-    item6100  Datastream code (MNEM) — company identifier
-    item6001  Fiscal year (integer, e.g. 2005)
-    item2999  WC02999: Total Assets (millions, reporting currency)
-    item3501  WC03501: Common Equity (millions, reporting currency)
-    item8001  WC08001: Market Capitalisation (millions, reporting currency)
+    Lookup chain (confirmed via test.ipynb Steps 8-15)
+    ---------------------------------------------------
+    1. tr_ds_equities.wrds_ds_names      dsmnem -> infocode (Datastream numeric ID)
+    2. wrdsapps_link_datastream_wscope.ds2ws_linktable  infocode -> code (Worldscope numeric ID)
+    3. tr_worldscope.wrds_ws_funda       code, year_, freq='A' -> item2999, item3501
+    4. tr_worldscope.wrds_ws_stock       code, year_, freq='A' -> item8001 (market cap)
 
-    NOTE — schema verification
-    --------------------------
-    WRDS may expose Worldscope under a different schema name depending on your
-    institution's subscription. If this query fails, run:
-        db.list_schemas()
-        db.list_tables(library='worldscope')
-    to find the correct schema and table name, then update the FROM clause below.
-
-    NOTE — currency
-    ---------------
-    Worldscope values are in the company's reporting currency. When these rows
-    are summed with USD-denominated domestic data in prep_dataset(), the ratios
-    (market_cap_ratio, book_cap_ratio) will be approximately correct only if the
-    international company's reporting currency is close to USD, or if the
-    company's balance sheet is small relative to the US aggregate. For higher
-    accuracy, apply FX conversion before concatenation.
+    Item codes
+    ----------
+    item2999  WC02999 : Total Assets
+    item3501  WC03501 : Common Equity
+    item8001  WC08001 : Market Capitalisation  (in wrds_ws_stock, not wrds_ws_funda)
 
     Parameters
     ----------
-    mnem       : str   Datastream MNEM, e.g. 'H:AAB'
+    mnem       : str   Datastream MNEM, e.g. 'BARC', 'H:AAB', 'D:DBK'
     start_date : str   'MM/DD/YYYY'
     end_date   : str   'MM/DD/YYYY' or 'Current'
     db         : wrds.Connection
@@ -420,21 +408,34 @@ def _fetch_intl_financial_data(mnem, start_date, end_date, db):
     start_year = pd.to_datetime(start_date).year
     end_year = pd.to_datetime(end_date).year
 
+    # DISTINCT ON (f.year_) + ORDER BY f.year_, f.seq picks the lowest seq
+    # (primary annual report) when multiple restatement rows exist for a year.
     query = f"""
-        SELECT item6001 AS fiscal_year,
-               item2999 AS total_assets,
-               item3501 AS book_equity,
-               item8001 AS market_equity
-        FROM worldscope.wrds_ws_funda
-        WHERE item6100 = '{mnem}'
-          AND item6001 BETWEEN {start_year} AND {end_year}
-        ORDER BY item6001
+        SELECT DISTINCT ON (f.year_)
+               f.year_    AS fiscal_year,
+               f.item2999 AS total_assets,
+               f.item3501 AS book_equity,
+               s.item8001 AS market_equity
+        FROM tr_worldscope.wrds_ws_funda f
+        LEFT JOIN tr_worldscope.wrds_ws_stock s
+            ON  f.code  = s.code
+            AND f.year_ = s.year_
+            AND s.freq  = 'A'
+        WHERE f.code IN (
+            SELECT l.code
+            FROM tr_ds_equities.wrds_ds_names n
+            JOIN wrdsapps_link_datastream_wscope.ds2ws_linktable l
+                ON n.infocode = l.infocode
+            WHERE n.dsmnem = '{mnem}'
+        )
+        AND f.year_ BETWEEN {start_year} AND {end_year}
+        AND f.freq = 'A'
+        ORDER BY f.year_, f.seq
     """
     try:
         data = db.raw_sql(query)
     except Exception as e:
         print(f"Worldscope query failed for {mnem}: {e}")
-        print("  Check schema/table name — see NOTE in _fetch_intl_financial_data docstring.")
         return pd.DataFrame()
 
     if data.empty:
@@ -443,7 +444,7 @@ def _fetch_intl_financial_data(mnem, start_date, end_date, db):
 
     # book_debt mirrors the domestic Compustat formula: atq - ceqq = total liabilities
     data['book_debt'] = data['total_assets'] - data['book_equity']
-    data = data.dropna(subset=['total_assets', 'book_equity', 'market_equity'])
+    data = data.dropna(subset=['total_assets', 'book_equity'])
 
     return _annual_to_quarterly(data, mnem)
 
