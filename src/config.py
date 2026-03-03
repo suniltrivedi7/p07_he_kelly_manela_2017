@@ -14,10 +14,18 @@ from decouple import config
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+def _resolve(raw, default):
+    """Resolve a path string relative to BASE_DIR if not absolute."""
+    if raw is None:
+        return default
+    p = Path(raw)
+    return p if p.is_absolute() else (BASE_DIR / p).resolve()
+
 WRDS_USERNAME = config("WRDS_USERNAME", default="")
-MANUAL_DATA = config('MANUAL_DATA', default=(BASE_DIR / 'data_manual'), cast=Path)
-DATA_DIR = config('DATA_DIR', default=(BASE_DIR / '_data'), cast=Path)
-OUTPUT_DIR = config('OUTPUT_DIR', default=(BASE_DIR / '_output'), cast=Path)
+MANUAL_DATA = _resolve(config('MANUAL_DATA', default=None), BASE_DIR / 'data_manual')
+DATA_DIR    = _resolve(config('DATA_DIR',    default=None), BASE_DIR / '_data')
+OUTPUT_DIR  = _resolve(config('OUTPUT_DIR',  default=None), BASE_DIR / '_output')
 START_DATE = config('START_DATE', default='1960-01-01')
 END_DATE = config('END_DATE', default='2012-12-31')
 UPDATED_END_DATE = config('UPDATED_END_DATE', default='2025-01-01')

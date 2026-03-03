@@ -49,8 +49,8 @@ def load_tex_content_no_env(tex_file: Path) -> list[str]:
         for original_line in f:
             line = original_line.rstrip("\n")
 
-            # skip environment lines
-            if any(token in line for token in ["\\begin{table", "\\end{table}", "\\caption{"]):
+            # skip environment lines and \label (labels with spaces break xelatex)
+            if any(token in line for token in ["\\begin{table", "\\end{table}", "\\caption{", "\\label{"]):
                 continue
 
             # skip repeated lines
@@ -198,9 +198,9 @@ def main():
     ########################################################
     latex_lines.append(r"\section{Table 2 Replication}")
 
-    # sub-item 1) table02.tex => no shrink
+    # sub-item 1) table02_fixed.tex => no shrink
     latex_lines.extend(build_table_env_no_shrink(
-        output_dir / "table02.tex",
+        output_dir / "table02_fixed.tex",
         "Table 2 Replication"
     ))
     # sub-item 2) table02_figure.png => figure
@@ -227,9 +227,9 @@ def main():
     latex_lines.append(r"\section{Table 2 (Updated)}")
     latex_lines.append("Below is the Table 2 result calculated using updated data up to 2025-02-01.")
 
-    # 1) updated_table02.tex => no shrink
+    # 1) updated_table02_fixed.tex => no shrink
     latex_lines.extend(build_table_env_no_shrink(
-        output_dir / "updated_table02.tex",
+        output_dir / "updated_table02_fixed.tex",
         "Table 2(Updated)"
     ))
     # 2) updated_table02_figure.png => figure
@@ -282,30 +282,31 @@ def main():
     ))
 
     ########################################################
-    # Table 3 (Updated)
+    # Paper Figures (Extensions)
     ########################################################
-    latex_lines.append(r"\section{Table 3 (Updated)}")
-    latex_lines.append("Below is the Table 3 result calculated using updated data up to 2025-02-01.")
+    latex_lines.append(r"\section{Paper Figures (Extensions)}")
+    latex_lines.append(
+        "The following figures replicate Figure 1 and Figure 4 from He, Kelly, and Manela (2017)."
+    )
 
-    # 1) updated_table03.tex => no shrink
-    latex_lines.extend(build_table_env_no_shrink(
-        output_dir / "updated_table03.tex",
-        "Table 3(Updated)"
-    ))
-    # 2) updated_table03_figure.png => figure
+    # Figure 1: Intermediary capital ratio and risk factor
     latex_lines.extend(build_figure_env(
-        "updated_table03_figure.png",
-        "Three Key Ratios Chart (Updated)"
+        "figure01.png",
+        "Figure 1: Intermediary Capital Ratio and Risk Factor",
+        "Intermediary capital risk factor (dashed line) is AR(1) innovations to the market-based "
+        "capital ratio of primary dealers (solid line), scaled by the lagged capital ratio. "
+        "Both time-series are standardized to zero mean and unit variance. "
+        "Quarterly sample 1970Q1--2012Q4. Shaded regions indicate NBER recessions."
     ))
-    # 3) updated_table03_figure03.png => figure
+
+    # Figure 4: Two-panel comparison of capital measures
     latex_lines.extend(build_figure_env(
-        "updated_table03_figure03.png",
-        "Variable Trend Chart (Updated)"
-    ))
-    # 4) updated_table03_sstable.tex => shrink
-    latex_lines.extend(build_table_env_shrink(
-        output_dir / "updated_table03_sstable.tex",
-        "Table 3 Descriptive Statistics(Updated)"
+        "figure04.png",
+        "Figure 4: Intermediary Capital Measures Comparison",
+        "Panel A compares the aggregate market-based capital ratio of NY Fed primary dealers "
+        "with book capital ratio and AEM leverage ratio (levels, log scale). "
+        "Panel B shows the corresponding risk factors (AR(1) innovations). "
+        "Quarterly sample 1970Q1--2012Q4. Shaded regions indicate NBER recessions."
     ))
 
     latex_lines.append(r"\end{document}")
