@@ -988,49 +988,20 @@ def convert_and_export_table_to_latex(formatted_table, UPDATED=False):
 # --------------------------
 
 def main(UPDATED=False):
-    db = wrds.Connection(wrds_username=config.WRDS_USERNAME)
+    # Load pre-pulled WRDS data from parquet (produced by pull_table02_data.py).
+    # All groups were pulled through UPDATED_END_DATE; analysis windows are
+    # applied downstream by build_all_monthly_totals / compute_table2_ratios.
+    PULLED_DIR = config.DATA_DIR / "pulled"
 
     merged_main = clean_primary_dealers_data(fname="Primary_Dealer_Link_Table3_DOMESTIC.csv")
-    link_hist = load_link_table(fname="updated_linktable.csv")
 
-    end_for_ccm = config.END_DATE if not UPDATED else config.UPDATED_END_DATE
-
-    # CCM universe: all gvkeys with CRSP-Compustat links (covers both INDL and FS)
-    ccm_gvkeys = get_ccm_gvkey_universe(db, config.START_DATE, end_for_ccm)
-    print(f"[CCM] gvkeys in universe: {len(ccm_gvkeys)}\n")
-
-    # Fix 7: Build BD and Banks gvkeys directly from WRDS (INDL + FS format).
-    # This replaces the INDL-only updated_linktable.csv filter for these groups.
-    # 6211 = security brokers/dealers.  The paper footnote also mentions 6221
-    # (commodity contracts dealers/brokers) but adding it moves BD ratios further
-    # from the HKM targets, suggesting 6221 firms are small / sparse in Compustat
-    # and HKM's implementation effectively used only 6211.
-    BD_SICS = [6211]
-    # 6020/6021/6022 = state/national commercial banks and bank holding companies.
-    # Excludes 6011 (Federal Reserve Banks), 6029, 6081/6082 (foreign bank branches)
-    # which inflate the denominator with non-comparable or foreign-incorporated entities.
-    BANK_SICS = [6020, 6021, 6022]
-
-    print("[WRDS] Querying BD comparison group gvkeys (INDL + FS)...")
-    wrds_bd_gvkeys = get_comparison_group_gvkeys_from_wrds(
-        db, BD_SICS, config.START_DATE, end_for_ccm
-    )
-    print(f"  -> {len(wrds_bd_gvkeys)} BD gvkeys from WRDS\n")
-
-    print("[WRDS] Querying Banks comparison group gvkeys (INDL + FS)...")
-    wrds_banks_gvkeys = get_comparison_group_gvkeys_from_wrds(
-        db, BANK_SICS, config.START_DATE, end_for_ccm
-    )
-    print(f"  -> {len(wrds_banks_gvkeys)} Banks gvkeys from WRDS\n")
-
-    group_links = create_comparison_group_linktables(
-        link_hist, merged_main,
-        ccm_gvkeys=ccm_gvkeys,
-        wrds_bd_gvkeys=wrds_bd_gvkeys,
-        wrds_banks_gvkeys=wrds_banks_gvkeys,
-    )
-
-    ds = pull_data_for_all_comparison_groups(db, group_links, UPDATED=UPDATED)
+    ds = {
+        "PD":      pd.read_parquet(PULLED_DIR / "table02_raw_PD.parquet"),
+        "BD":      pd.read_parquet(PULLED_DIR / "table02_raw_BD.parquet"),
+        "Banks":   pd.read_parquet(PULLED_DIR / "table02_raw_Banks.parquet"),
+        "Cmpust.": pd.read_parquet(PULLED_DIR / "table02_raw_Cmpust.parquet"),
+    }
+    print("[LOAD] Table 2 parquet data loaded from _data/pulled/")
 
     # --- PD coverage diagnostic ---
     # Prints which PD gvkeys have Compustat data and what year range.
@@ -1069,43 +1040,8 @@ def main(UPDATED=False):
         print(f"  {gvkey:>6}  {yr_range:30s}  {names}{flag}")
     print()
 
-    # --- Diagnostic A: Compustat company name & SIC per PD gvkey ---
-    # Flags holding-company vs. subsidiary mismatches: if the registered
-    # Compustat name includes words like "National Bank", "Trust Co",
-    # "Securities Inc", etc. the gvkey may be a subsidiary, not the parent.
-    print("[PD GVKEY ENTITY CHECK] Compustat company name & SIC code")
-    pd_gvkeys_list = sorted(mm_diag["gvkey"].unique().tolist())
-    gvkey_str = ", ".join(f"'{g}'" for g in pd_gvkeys_list)
-    try:
-        entity_q = f"""
-            SELECT gvkey, conm, sic
-            FROM comp.company
-            WHERE gvkey IN ({gvkey_str})
-            ORDER BY gvkey
-        """
-        entity_df = db.raw_sql(entity_q)
-        entity_df["gvkey"] = entity_df["gvkey"].astype(str).str.zfill(6)
-        # Flag gvkeys whose registered name looks like a subsidiary
-        subsidiary_keywords = [
-            "national bank", "trust co", "savings bank", "securities inc",
-            "securities corp", "securities llc", "capital markets", "brokerage",
-        ]
-        print(f"  {'gvkey':>6}  {'SIC':>4}  {'Compustat Company Name'}")
-        for _, row in entity_df.sort_values("gvkey").iterrows():
-            name_lower = str(row["conm"]).lower()
-            flag = ""
-            if any(kw in name_lower for kw in subsidiary_keywords):
-                flag = "  <-- possible subsidiary"
-            print(f"  {row['gvkey']:>6}  {str(row['sic']):>4}  {row['conm']}{flag}")
-        # Also flag PD gvkeys missing from comp.company entirely
-        found = set(entity_df["gvkey"].tolist())
-        missing = set(pd_gvkeys_list) - found
-        if missing:
-            for g in sorted(missing):
-                print(f"  {g:>6}  ????  NOT IN comp.company")
-    except Exception as e:
-        print(f"  (entity check failed: {e})")
-    print()
+    # --- Diagnostic A: PD entity check (requires live WRDS connection) ---
+    # Moved to pull_table02_data.py.  Re-run that script to see entity names / SIC codes.
 
     # --- Diagnostic B: PD numerator coverage rate by year ---
     # For each calendar year, shows: active PDs in link table vs. those with
@@ -1142,62 +1078,8 @@ def main(UPDATED=False):
         print(f"  {yr:>4}  {n_active:>10}  {n_with_data:>9}  {coverage:>8}  {at_str}")
     print()
 
-    # --- Diagnostic C: Asset-magnitude check for SIC-mismatch / wrong-entity gvkeys ---
-    # These four gvkeys were flagged by Diagnostic A as mapping to insurance /
-    # conglomerate companies rather than the broker-dealer PD firm:
-    #   10705  Dillon Read & Co Inc (06/1988-09/1997) → Travelers Corp (SIC 6331)
-    #    5843  Blyth Eastman Dillon (12/1974-12/1979) → INA Corp (SIC 6331)
-    #    9380  Nuveen Govt Sec Inc  (11/1971-08/1980) → St. Paul Cos (SIC 6331)
-    #    1447  Lehman / Shearson (1976-1995)          → American Express Co
-    # If the atq values are in the $100B+ range those gvkeys are returning the
-    # parent conglomerate's consolidated balance sheet, NOT the PD subsidiary.
-    # Expected broker-dealer sizes (rough reference):
-    #   Dillon Read:  $15-40B   Blyth Eastman Dillon: $1-5B
-    #   Nuveen GS:    $0.5-3B   Lehman standalone:    $20-80B (AmEx parent ~$100B+)
-    FLAGGED_GVKEYS = {
-        "010705": ("Dillon Read / Travelers Corp",    "1984-01-01", "2000-12-31"),
-        "005843": ("Blyth Eastman / INA Corp",        "1970-01-01", "1985-12-31"),
-        "009380": ("Nuveen Govt Sec / St. Paul Cos",  "1967-01-01", "1985-12-31"),
-        "001447": ("Lehman / Shearson / AmEx",        "1972-01-01", "2000-12-31"),
-    }
-
-    print("[DIAGNOSTIC C] Asset magnitude check for flagged gvkeys")
-    print("  (if atq >> expected BD range, the gvkey tracks the parent conglomerate)")
-    for gvk, (label, d_start, d_end) in FLAGGED_GVKEYS.items():
-        print(f"\n  {gvk}  {label}")
-        print(f"  {'Year':>4}  {'atq ($M)':>12}  {'indfmt':>6}  {'company':>30}")
-        try:
-            diag_q = f"""
-                SELECT EXTRACT(YEAR FROM datadate)::int AS yr,
-                       atq,
-                       indfmt,
-                       conm
-                FROM comp.fundq
-                WHERE gvkey = '{gvk}'
-                  AND datadate BETWEEN '{d_start}' AND '{d_end}'
-                  AND (indfmt = 'INDL' OR indfmt = 'FS')
-                  AND datafmt = 'STD'
-                  AND popsrc = 'D'
-                  AND consol = 'C'
-                  AND atq IS NOT NULL
-                ORDER BY datadate
-            """
-            diag_df = db.raw_sql(diag_q)
-            if diag_df.empty:
-                print(f"    (no data in comp.fundq for this window)")
-            else:
-                # Show one representative row per year (max atq within year)
-                by_yr = (
-                    diag_df.sort_values("atq", ascending=False)
-                           .drop_duplicates("yr")
-                           .sort_values("yr")
-                )
-                for _, r in by_yr.iterrows():
-                    atq_str = f"{r['atq']:>12,.0f}" if pd.notna(r["atq"]) else f"{'NaN':>12}"
-                    print(f"  {int(r['yr']):>4}  {atq_str}  {str(r['indfmt']):>6}  {str(r['conm']):>30}")
-        except Exception as exc:
-            print(f"    (query failed: {exc})")
-    print()
+    # --- Diagnostic C: Asset-magnitude check (requires live WRDS connection) ---
+    # Moved to pull_table02_data.py.  Re-run that script to see per-year atq values.
 
     # Fix 11: build the month-by-month PD active schedule for time-varying
     # Banks exclusion.  Covers the full sample so both UPDATED and base runs
@@ -1230,7 +1112,6 @@ def main(UPDATED=False):
 
     convert_and_export_table_to_latex(final, UPDATED=UPDATED)
 
-    db.close()
     return final
 
 

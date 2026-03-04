@@ -32,10 +32,37 @@ def task_generate_charts():
         "clean": []
     }
 
+def task_pull_table02_data():
+    """
+    Task: Pull all WRDS data for Table 2 and save to _data/pulled/ as parquet files.
+    Only re-runs when pull_table02_data.py changes or a target file is missing.
+    """
+    return {
+        "actions": [
+            'ipython -c "import sys; sys.path.insert(0, \'src\'); import pull_table02_data; pull_table02_data.main()"'
+        ],
+        "file_dep": [
+            "./src/pull_table02_data.py",
+            "./src/Table02Prep.py",
+        ],
+        "targets": [
+            f"{DATA_DIR}/pulled/table02_ccm_gvkeys.parquet",
+            f"{DATA_DIR}/pulled/table02_bd_gvkeys.parquet",
+            f"{DATA_DIR}/pulled/table02_banks_gvkeys.parquet",
+            f"{DATA_DIR}/pulled/table02_raw_PD.parquet",
+            f"{DATA_DIR}/pulled/table02_raw_BD.parquet",
+            f"{DATA_DIR}/pulled/table02_raw_Banks.parquet",
+            f"{DATA_DIR}/pulled/table02_raw_Cmpust.parquet",
+        ],
+        "clean": [],
+    }
+
+
 def task_table02_main():
     """
     Task: Run Table02Prep.py to generate Table 2's LaTeX tables and figures.
     Execute both the original version (UPDATED=False) and the updated version (UPDATED=True).
+    Depends on task_pull_table02_data to ensure parquet files exist.
     """
     return {
         "actions": [
@@ -43,10 +70,14 @@ def task_table02_main():
             'ipython -c "import sys; sys.path.insert(0, \'src\'); import Table02Prep; Table02Prep.main(UPDATED=True)"'
         ],
         "file_dep": [
-            "./src/Table02Prep.py"
+            "./src/Table02Prep.py",
+            f"{DATA_DIR}/pulled/table02_raw_PD.parquet",
+            f"{DATA_DIR}/pulled/table02_raw_BD.parquet",
+            f"{DATA_DIR}/pulled/table02_raw_Banks.parquet",
+            f"{DATA_DIR}/pulled/table02_raw_Cmpust.parquet",
         ],
-        # We keep an empty clean key:
-        "clean": []
+        "task_dep": ["pull_table02_data"],
+        "clean": [],
     }
 
 def task_test_table02():
