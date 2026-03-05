@@ -12,9 +12,12 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 import pandas as pd
+import numpy as np
+import config  # Use config to standardize paths
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import config  # Use config to standardize paths
+import matplotlib.ticker as ticker
+from datetime import datetime
 
 def create_summary_stat_table_for_data(dataset, UPDATED=False):
     """
@@ -97,12 +100,7 @@ def plot_figure01(ratios, factors, UPDATED=False):
 #     outfile = config.OUTPUT_DIR / ("updated_table03_figure.png" if UPDATED else "table03_figure.png")
 #     plt.savefig(outfile)
 #     plt.close()
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import matplotlib.ticker as ticker
-import pandas as pd
-import numpy as np
-from datetime import datetime
+
 
 def plot_figure02(ratios, correlation_panelA, UPDATED=False):
     """

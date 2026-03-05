@@ -162,25 +162,26 @@ def task_pull_fred_data():
         "clean": []
     }
 
-def task_run_notebook():
-    """
-    Task: Execute the FinalCombinedWalkthrough.ipynb notebook.
-    First clear the notebook outputs, then execute and save it to OUTPUT_DIR.
-    """
-    executed_notebook = Path(OUTPUT_DIR) / "FinalCombinedWalkthrough_executed.ipynb"
-    return {
-        "actions": [
-            f'jupyter nbconvert --ClearOutputPreprocessor.enabled=True --inplace ./src/FinalCombinedWalkthrough.ipynb',
-            f'jupyter nbconvert --to notebook --execute ./src/FinalCombinedWalkthrough.ipynb --output "{executed_notebook}"'
-        ],
-        "file_dep": [
-            "./src/FinalCombinedWalkthrough.ipynb"
-        ],
-        "targets": [
-            str(executed_notebook)
-        ],
-        "clean": []
-    }
+
+# def task_run_notebook():
+#     """
+#     Task: Execute the FinalCombinedWalkthrough.ipynb notebook.
+#     First clear the notebook outputs, then execute and save it to OUTPUT_DIR.
+#     """
+#     executed_notebook = Path(OUTPUT_DIR) / "FinalCombinedWalkthrough_executed.ipynb"
+#     return {
+#         "actions": [
+#             f'jupyter nbconvert --ClearOutputPreprocessor.enabled=True --inplace ./src/FinalCombinedWalkthrough.ipynb',
+#             f'jupyter nbconvert --to notebook --execute ./src/FinalCombinedWalkthrough.ipynb --output "{executed_notebook}"'
+#         ],
+#         "file_dep": [
+#             "./src/FinalCombinedWalkthrough.ipynb"
+#         ],
+#         "targets": [
+#             str(executed_notebook)
+#         ],
+#         "clean": []
+#     }
 
 def task_generate_latex_doc():
     """
@@ -206,11 +207,13 @@ def task_generate_latex_doc():
             "./_output/updated_table02_corr.tex",
 
             "./_output/table03.tex",
-            "./_output/table03_figure.png",
+            #"./_output/table03_figure.png",
             "./_output/table03_figure03.png",
             "./_output/table03_sstable.tex",
             "./_output/figure01.png",
             "./_output/figure04.png",
+            "./_output/updated_table03.tex",
+            "./_output/updated_table03_sstable.tex",
         ],
         # Explicit task dependencies to guarantee plot_figures runs before this task
         "task_dep": ["plot_figures"],

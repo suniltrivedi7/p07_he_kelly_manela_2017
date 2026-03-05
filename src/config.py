@@ -28,7 +28,7 @@ DATA_DIR    = _resolve(config('DATA_DIR',    default=None), BASE_DIR / '_data')
 OUTPUT_DIR  = _resolve(config('OUTPUT_DIR',  default=None), BASE_DIR / '_output')
 START_DATE = config('START_DATE', default='1960-01-01')
 END_DATE = config('END_DATE', default='2012-12-31')
-UPDATED_END_DATE = config('UPDATED_END_DATE', default='2025-01-01')
+UPDATED_END_DATE = config('UPDATED_END_DATE', default='2020-12-31')
 
 def ensure_directories():
     """

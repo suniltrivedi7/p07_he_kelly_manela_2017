@@ -419,7 +419,7 @@ def convert_and_export_tables_to_latex(corrA, corrB, UPDATED=False):
     \begin{{table}}[htbp]
     \centering
     \caption{{\label{{tab:correlation}}{caption}}}
-    \begin{{adjustbox}}{{max width=\textwidth}}
+    \scalebox{{0.75}}{{
     \small
     \begin{{tabular}}{{{column_format}}}
         \toprule
@@ -436,7 +436,7 @@ def convert_and_export_tables_to_latex(corrA, corrB, UPDATED=False):
         {panelB_rows}
         \bottomrule
     \end{{tabular}}
-    \end{{adjustbox}}
+    }}
     \end{{table}}
     """
     outfile = config.OUTPUT_DIR / ("updated_table03.tex" if UPDATED else "table03.tex")

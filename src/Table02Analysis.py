@@ -2,14 +2,14 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 import pandas as pd
-import wrds
+import numpy as np
 import config
 from datetime import datetime
 import matplotlib.pyplot as plt
-import numpy as np
-from pathlib import Path
-import warnings
+
 warnings.filterwarnings("ignore")
+
+KEY_COLS = ["total_assets", "book_debt", "book_equity", "market_equity"]
 
 """
 Table02Analysis.py
@@ -188,3 +188,121 @@ def create_corr_matrix_for_data(datasets, UPDATED=False):
         f.write(final_txt)
 
     print(f"Correlation matrix LaTeX saved to: {out}")
+
+
+def compute_table2_ratios(monthly_totals: dict, start: str, end: str) -> pd.DataFrame:
+    """
+    Compute ratios: PD / (PD + group_less_PD) per month.
+    Assumes BD / Banks / Cmpust. groups already exclude PD gvkeys.
+    """
+    pd_m = monthly_totals["PD"].copy().set_index("mdate")
+    out = {}
+
+    for grp in ["BD", "Banks", "Cmpust."]:
+        g = monthly_totals[grp].copy().set_index("mdate")
+
+        aligned = pd_m[KEY_COLS].join(g[KEY_COLS], how="inner",
+                                      lsuffix="_pd", rsuffix="_g")
+
+        print(f"\n[RATIO DIAGNOSTICS] Group={grp}")
+        print(f"  aligned months: {len(aligned)}")
+        print(f"  PD total_assets missing: {aligned['total_assets_pd'].isna().mean():.3%}")
+        print(f"  {grp} total_assets missing: {aligned['total_assets_g'].isna().mean():.3%}")
+
+        for col in KEY_COLS:
+            g_vals = aligned[f"{col}_g"].copy()
+            if grp == "BD":
+                g_vals = g_vals.fillna(0)
+            denom = aligned[f"{col}_pd"] + g_vals
+            denom0 = (denom == 0).mean()
+            denom_na = denom.isna().mean()
+            ratio = aligned[f"{col}_pd"] / denom.replace(0, np.nan)
+            r_na = ratio.isna().mean()
+            r_gt1 = (ratio > 1).mean()
+            r_lt0 = (ratio < 0).mean()
+
+            print(f"  {col}: denom==0 {denom0:.3%}, denom NA {denom_na:.3%}, "
+                  f"ratio NA {r_na:.3%}, ratio>1 {r_gt1:.3%}, ratio<0 {r_lt0:.3%}")
+
+            if ratio.notna().any():
+                top = ratio.sort_values(ascending=False).head(3)
+                bot = ratio.sort_values(ascending=True).head(3)
+                print(f"    top3: {[(str(i.date()), round(float(v), 4)) for i, v in top.items()]}")
+                print(f"    bot3: {[(str(i.date()), round(float(v), 4)) for i, v in bot.items()]}")
+
+            out[f"{col}_{grp}"] = ratio
+
+    ratios = pd.DataFrame(out)
+    ratios.index.name = "mdate"
+    ratios = ratios.loc[
+        (ratios.index >= pd.to_datetime(start)) & (ratios.index <= pd.to_datetime(end))
+    ]
+
+    print("\n[OVERALL RATIO MISSING SHARE]")
+    print(ratios.isna().mean().sort_values(ascending=False).head(12))
+
+    return ratios
+
+
+def summarize_table2(ratios: pd.DataFrame, UPDATED=False) -> pd.DataFrame:
+    """
+    Aggregate monthly ratios into period averages and format as a
+    MultiIndex DataFrame matching HKM Table 2 layout.
+    """
+    if not UPDATED:
+        periods = [
+            ("1960-01-01", "2012-12-31", "1960-2012"),
+            ("1960-01-01", "1990-12-31", "1960-1990"),
+            ("1990-01-01", "2012-12-31", "1990-2012"),
+        ]
+    else:
+        periods = [
+            ("1960-01-01", "2025-01-01", "1960-2025"),
+            ("1960-01-01", "1990-12-31", "1960-1990"),
+            ("1990-01-01", "2025-01-01", "1990-2025"),
+        ]
+
+    rows = []
+    for s, e, name in periods:
+        sub = ratios.loc[pd.to_datetime(s):pd.to_datetime(e)]
+        nmonths = len(sub)
+        complete = sub.notna().all(axis=1).mean() if nmonths else np.nan
+
+        print(f"\n[PERIOD DIAGNOSTICS] {name}")
+        print(f"  months in period: {nmonths}")
+        print(f"  share months complete across ALL columns: {complete:.3f}")
+
+        preview_cols = [c for c in sub.columns if c.startswith("total_assets_")]
+        if nmonths and preview_cols:
+            print("  total_assets means:", sub[preview_cols].mean().to_dict())
+
+        rows.append(pd.Series(sub.mean(numeric_only=True), name=name))
+
+    table = pd.DataFrame(rows)
+
+    all_cols = [
+        "total_assets_BD", "total_assets_Banks", "total_assets_Cmpust.",
+        "book_debt_BD", "book_debt_Banks", "book_debt_Cmpust.",
+        "book_equity_BD", "book_equity_Banks", "book_equity_Cmpust.",
+        "market_equity_BD", "market_equity_Banks", "market_equity_Cmpust.",
+    ]
+    table = table[all_cols]
+
+    mapping = {
+        "total_assets_BD":       ("Total assets", "BD"),
+        "total_assets_Banks":    ("Total assets", "Banks"),
+        "total_assets_Cmpust.":  ("Total assets", "Cmpust."),
+        "book_debt_BD":          ("Book debt", "BD"),
+        "book_debt_Banks":       ("Book debt", "Banks"),
+        "book_debt_Cmpust.":     ("Book debt", "Cmpust."),
+        "book_equity_BD":        ("Book equity", "BD"),
+        "book_equity_Banks":     ("Book equity", "Banks"),
+        "book_equity_Cmpust.":   ("Book equity", "Cmpust."),
+        "market_equity_BD":      ("Market equity", "BD"),
+        "market_equity_Banks":   ("Market equity", "Banks"),
+        "market_equity_Cmpust.": ("Market equity", "Cmpust."),
+    }
+    table.columns = pd.MultiIndex.from_tuples(
+        [mapping[c] for c in table.columns], names=["Metric", "Source"]
+    )
+    return table

@@ -53,6 +53,7 @@ def load_tex_content_no_env(tex_file: Path) -> list[str]:
             if any(token in line for token in ["\\begin{table", "\\end{table}", "\\caption{", "\\label{"]):
                 continue
 
+
             # skip repeated lines
             if any(phrase in line for phrase in skip_phrases):
                 continue
@@ -88,7 +89,7 @@ def build_table_env_no_shrink(tex_file: Path, custom_title: str, descriptive_tex
 
 def build_table_env_shrink(tex_file: Path, custom_title: str, descriptive_text: str = "") -> list[str]:
     """
-    \begin{table}[H], uses adjustbox => shrink if wide, no auto-numbering.
+    \begin{table}[H], uses scalebox to reduce wide tables, no auto-numbering.
     """
     lines = []
     lines.append(r"\begin{table}[H]")
@@ -101,10 +102,10 @@ def build_table_env_shrink(tex_file: Path, custom_title: str, descriptive_text: 
             lines.append(escape_underscores_in_text(desc_line))
         lines.append(r"\end{flushleft}")
 
-    lines.append(r"\begin{adjustbox}{max width=\textwidth}")
+    lines.append(r"\scalebox{0.75}{")
     body = load_tex_content_no_env(tex_file)
     lines.extend(body)
-    lines.append(r"\end{adjustbox}")
+    lines.append(r"}")
 
     lines.append(r"\end{table}")
     return lines
@@ -155,7 +156,7 @@ def main():
     latex_lines.append(r"\usepackage{graphicx}")
     latex_lines.append(r"\usepackage{geometry}")
     latex_lines.append(r"\usepackage{xcolor}")
-    latex_lines.append(r"\usepackage{adjustbox}")
+    # adjustbox removed: use resizebox from graphicx instead
     latex_lines.append(r"\usepackage{booktabs}")
     latex_lines.append(r"\usepackage{amsmath}")
     latex_lines.append(r"\usepackage{amssymb}")
@@ -167,8 +168,8 @@ def main():
 
     # Title
     latex_lines.append(r"\title{Intermediary asset pricing: New evidence from many asset classes}")
-    latex_lines.append(r"\author{Hanlu Ge and Junyuan Liu}")
-    latex_lines.append(r"\date{}")
+    latex_lines.append(r"\author{Cole Ginter, Alex Nikolaev, and Sunil Trivedi}")
+    latex_lines.append(r"\date{March 10th, 2026}")
     latex_lines.append(r"\maketitle")
 
     # Introduction
@@ -264,21 +265,32 @@ def main():
         output_dir / "table03.tex",
         "Table 3(Replication)"
     ))
-    # 2) table03_figure.png => figure
-    latex_lines.extend(build_figure_env(
-        "table03_figure.png",
-        "Three Key Ratios Chart",
-        "The figure below shows the trends of three key ratios. They closely match the original paper, confirming the good replication results."
-    ))
-    # 3) table03_figure03.png => figure
+    # 2) table03_figure03.png => figure
     latex_lines.extend(build_figure_env(
         "table03_figure03.png",
         "Variable Trend Chart"
     ))
-    # 4) table03_sstable => shrink
+    # 3) table03_sstable => shrink
     latex_lines.extend(build_table_env_shrink(
         output_dir / "table03_sstable.tex",
         "Table 3 Descriptive Statistics"
+    ))
+
+    ########################################################
+    # Table 3 (Updated)
+    ########################################################
+    latex_lines.append(r"\section{Table 3 (Updated)}")
+    latex_lines.append("Below is the Table 3 result calculated using updated data.")
+
+    # 1) updated_table03.tex => no shrink
+    latex_lines.extend(build_table_env_no_shrink(
+        output_dir / "updated_table03.tex",
+        "Table 3(Updated)"
+    ))
+    # 2) updated_table03_sstable => shrink
+    latex_lines.extend(build_table_env_shrink(
+        output_dir / "updated_table03_sstable.tex",
+        "Table 3 Descriptive Statistics(Updated)"
     ))
 
     ########################################################
