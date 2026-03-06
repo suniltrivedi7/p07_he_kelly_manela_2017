@@ -26,10 +26,17 @@ def create_summary_stat_table_for_data(datasets, UPDATED=False):
     """
     Creates summary statistics (count, mean, std, min, max) for each group's dataset,
     outputs them as a LaTeX table to config.OUTPUT_DIR.
+    Filters data to config.UPDATED_END_DATE if UPDATED=True, else config.END_DATE.
     """
+    end_date = pd.to_datetime(config.UPDATED_END_DATE if UPDATED else config.END_DATE)
+
     summary_df = pd.DataFrame()
     for gname, df in datasets.items():
-        local_df = df.drop(columns=['datadate'], errors='ignore')
+        local_df = df.copy()
+        local_df['datadate'] = pd.to_datetime(local_df['datadate'])
+        local_df = local_df[local_df['datadate'] <= end_date]
+        local_df = local_df.drop(columns=['datadate'], errors='ignore')
+
         stats = local_df.describe()
         stats = stats.drop(['25%', '50%', '75%'], errors='ignore')
         numeric_cols = stats.select_dtypes(include=['float64','int']).columns
@@ -131,8 +138,11 @@ def create_corr_matrix_for_data(datasets, UPDATED=False):
     """
     Builds correlation matrices for each metric (total_assets, book_debt, book_equity, market_equity)
     across PD, BD, Banks, Cmpust.
+    Filters data to config.UPDATED_END_DATE if UPDATED=True, else config.END_DATE.
     The result is saved as a LaTeX file in config.OUTPUT_DIR, with underscores escaped.
     """
+    end_date = pd.to_datetime(config.UPDATED_END_DATE if UPDATED else config.END_DATE)
+
     group_order = ['PD','BD','Banks','Cmpust.']
     metrics = ['total_assets','book_debt','book_equity','market_equity']
     all_latex = []
@@ -146,6 +156,7 @@ def create_corr_matrix_for_data(datasets, UPDATED=False):
                 continue
             sub = datasets[g][['datadate', m]].copy()
             sub['datadate'] = pd.to_datetime(sub['datadate'])
+            sub = sub[sub['datadate'] <= end_date]
             sub[m] = pd.to_numeric(sub[m], errors='coerce')
             sub = sub.dropna(subset=[m])
             sub = sub.drop_duplicates(subset=['datadate'])
@@ -163,17 +174,14 @@ def create_corr_matrix_for_data(datasets, UPDATED=False):
 
         corr = combined_df.corr()
 
-        # Escape underscores in the metric name for the caption
         escaped_m = m.replace("_", r"\_")
         c_latex = corr.to_latex(
             float_format="%.3f",
             caption=f"Correlation of {escaped_m} across PD, BD, Banks, Cmpust.",
             label=f"tab:{m}",
-            escape=False  # We'll manually replace underscores next
+            escape=False
         )
-        # Now manually escape underscores in the final string
         c_latex = c_latex.replace("_", r"\_")
-
         all_latex.append(c_latex)
 
     final_txt = "\n\n".join(all_latex)

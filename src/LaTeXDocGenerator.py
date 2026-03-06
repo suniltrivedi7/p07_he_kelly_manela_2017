@@ -175,14 +175,16 @@ def main():
     # Introduction
     latex_lines.append(r"\section{Introduction}")
 
-    intro_p1 = r"""In this Final Project, our main task is to reproduce Table 2 and Table 3 from the paper "Intermediary asset pricing: New evidence from many asset classes" and to carry out a series of extension works based on this. Our specific work is divided into the following parts:"""
+    intro_p1 = r"""In this Final Project, our main task is to reproduce Table 2 and Table 3 from the paper "Intermediary asset pricing: New evidence from many asset classes". In addition to this, we will also reproduce Figure 1 and Figure 4. Our specific work is divided into the following parts:"""
     for line in intro_p1.splitlines():
         latex_lines.append(escape_underscores_in_text(line))
 
     bullet_points = [
-        "Modify the primary dealer list (ticks.csv) based on real data sources.",
+        "Identify the holding company for each primary dealer, differentiating between domestic and foreign.",
         "Adjust the calculation methods for key ratios and macroeconomic variables in Table 2 and Table 3 according to the description in the paper.",
-        "Automatically generate and save the reproduced table results as .tex files, and further perform data analysis such as descriptive statistics, correlation analysis, and trend plots of factors.",
+        "Reproduce the tables and figures based on the original data, and compare the results with the target results in the paper to identify discrepancies and areas for improvement.",
+        "Update the data to the end of 2020 and recalculate the tables and figures to see how the results change with more recent data.",
+        "Automatically generate and save the reproduced table results as .tex / .png files, and further perform data analysis such as descriptive statistics, correlation analysis, and trend plots of factors.",
         "Write additional files and implement project automation, such as the notebook, dodo.py, README file, and test files."
     ]
     latex_lines.append(r"\begin{itemize}")
@@ -198,6 +200,7 @@ def main():
     # Table 2 Replication
     ########################################################
     latex_lines.append(r"\section{Table 2 Replication}")
+    latex_lines.append("First, we replicate Table 2 by building upon the strong work of the prior year's group. It is very much worth noting that we were able to improve upon the accuracy of the Table 2 replication by utilizing data from the holding company level for the primary dealers. We were able to identify Compustat vintage issues as the likely reason for our numbers being slightly lower than the original paper's.")
 
     # sub-item 1) table02_fixed.tex => no shrink
     latex_lines.extend(build_table_env_no_shrink(
@@ -218,15 +221,14 @@ def main():
     # sub-item 4) table02_sstable => shrink
     latex_lines.extend(build_table_env_shrink(
         output_dir / "table02_sstable.tex",
-        "Table 2 Descriptive Statistics",
-        "There are significantly fewer entries for book equity than for other measures as shown in the count rows. There are also some negatives for book equity."
+        "Table 2 Descriptive Statistics"
     ))
 
     ########################################################
     # Table 2 (Updated)
     ########################################################
     latex_lines.append(r"\section{Table 2 (Updated)}")
-    latex_lines.append("Below is the Table 2 result calculated using updated data up to 2025-02-01.")
+    latex_lines.append("Below is the Table 2 result calculated using updated data up to 2020-12-31.")
 
     # 1) updated_table02_fixed.tex => no shrink
     latex_lines.extend(build_table_env_no_shrink(
@@ -237,7 +239,7 @@ def main():
     latex_lines.extend(build_figure_env(
         "updated_table02_figure.png",
         "",
-        "In the graphs below, we can see each of the four ratios shown over the updated timeframe of 1960 to 2024."
+        "In the graphs below, we can see each of the four ratios shown over the updated timeframe of 1960 to 2020."
     ))
     # 3) updated_table02_corr.tex => no shrink
     latex_lines.extend(build_table_env_no_shrink(
@@ -247,8 +249,7 @@ def main():
     # 4) updated_table02_sstable.tex => shrink
     latex_lines.extend(build_table_env_shrink(
         output_dir / "updated_table02_sstable.tex",
-        "Table 2 Descriptive Statistics(Updated)",
-        "There are significantly fewer entries for book equity than for other measures as shown in the count rows. There are also some negatives for book equity."
+        "Table 2 Descriptive Statistics(Updated)"
     ))
 
     ########################################################
@@ -256,7 +257,7 @@ def main():
     ########################################################
     latex_lines.append(r"\section{Table 3 Replication}")
 
-    table3_intro = r"""Next, we replicate Table 3. We made many key logic corrections, including important ratio calculation methods, macroeconomic data sources, and computational methods. As a result, we have greatly optimized the reproduction performance, with most correlations being very close to the original table's results."""
+    table3_intro = r"""Next, we replicate Table 3. We were able to improve upon the past group's numbers via a combination of computational changes and the incorporation of foreign primary dealer data, which the original paper utilizes in its creation of Table 3."""
     for line in table3_intro.splitlines():
         latex_lines.append(escape_underscores_in_text(line))
 
@@ -279,6 +280,7 @@ def main():
     ########################################################
     # Table 3 (Updated)
     ########################################################
+    latex_lines.append(r"\newpage")
     latex_lines.append(r"\section{Table 3 (Updated)}")
     latex_lines.append("Below is the Table 3 result calculated using updated data.")
 
@@ -296,6 +298,7 @@ def main():
     ########################################################
     # Paper Figures (Extensions)
     ########################################################
+    latex_lines.append(r"\newpage")
     latex_lines.append(r"\section{Paper Figures (Extensions)}")
     latex_lines.append(
         "The following figures replicate Figure 1 and Figure 4 from He, Kelly, and Manela (2017)."
