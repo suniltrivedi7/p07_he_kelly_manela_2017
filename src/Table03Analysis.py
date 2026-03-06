@@ -19,7 +19,7 @@ import matplotlib.dates as mdates
 import matplotlib.ticker as ticker
 from datetime import datetime
 
-def create_summary_stat_table_for_data(dataset, UPDATED=False):
+def create_summary_stat_table_for_data(dataset, UPDATED=False, INCLUDE_FOREIGN=False):
     """
     Creates a summary statistics table for the dataset.
     Input: dataset (DataFrame) with numerical columns.
@@ -30,13 +30,15 @@ def create_summary_stat_table_for_data(dataset, UPDATED=False):
     info = dataset.describe()
     info = info.drop(['25%', '50%', '75%'])
     summary_df = pd.concat([summary_df, info], axis=0)
-    
+
     caption = "Summary statistics of capital factors and macro variables"
     latex_table = summary_df.to_latex(index=True, multirow=True, multicolumn=True,
                                       escape=False, float_format="%.2f", caption=caption, label='tab:Table 3.1')
     latex_table = latex_table.replace(r'\multirow[t]{5}{*}', '')
-    
-    outfile = config.OUTPUT_DIR / ("updated_table03_sstable.tex" if UPDATED else "table03_sstable.tex")
+
+    prefix = "updated_" if UPDATED else ""
+    intl = "_intl" if INCLUDE_FOREIGN else ""
+    outfile = config.OUTPUT_DIR / f"{prefix}table03{intl}_sstable.tex"
     with open(outfile, 'w', encoding='utf-8') as f:
         f.write(latex_table)
 
@@ -102,7 +104,7 @@ def plot_figure01(ratios, factors, UPDATED=False):
 #     plt.close()
 
 
-def plot_figure02(ratios, correlation_panelA, UPDATED=False):
+def plot_figure02(ratios, correlation_panelA, UPDATED=False, INCLUDE_FOREIGN=False):
     """
     Plots the levels of market cap ratio, book capital ratio, and AEM leverage over time,
     closely resembling the reference chart.
@@ -169,12 +171,14 @@ def plot_figure02(ratios, correlation_panelA, UPDATED=False):
     ax.set_title('AEM Leverage and Intermediary Capital Ratio: Level', fontsize=14)
     ax.legend(loc='best')
 
-    outfile = config.OUTPUT_DIR / ("updated_table03_figure.png" if UPDATED else "table03_figure.png")
+    prefix = "updated_" if UPDATED else ""
+    intl = "_intl" if INCLUDE_FOREIGN else ""
+    outfile = config.OUTPUT_DIR / f"{prefix}table03{intl}_figure.png"
     plt.savefig(outfile, dpi=300)
     plt.close(fig)  # close the figure to avoid repeated display
 
 
-def plot_figure03(ratios, macro, UPDATED=False):
+def plot_figure03(ratios, macro, UPDATED=False, INCLUDE_FOREIGN=False):
     """
     Plots the standardized trends of financial ratios and macroeconomic variables over time.
     Input: ratios (DataFrame) with 'market_cap_ratio', 'book_cap_ratio', and 'aem_leverage';
@@ -219,7 +223,9 @@ def plot_figure03(ratios, macro, UPDATED=False):
     ax2.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
     
     plt.tight_layout()
-    outfile = config.OUTPUT_DIR / ("updated_table03_figure03.png" if UPDATED else "table03_figure03.png")
+    prefix = "updated_" if UPDATED else ""
+    intl = "_intl" if INCLUDE_FOREIGN else ""
+    outfile = config.OUTPUT_DIR / f"{prefix}table03{intl}_figure03.png"
     plt.savefig(outfile)
     plt.close()
 

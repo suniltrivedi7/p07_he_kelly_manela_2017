@@ -98,12 +98,14 @@ def task_test_table02():
 def task_table03_main():
     """
     Task: Run Table03.py to generate Table 3's LaTeX tables, summary statistics, and figures.
-    Execute both the original version (UPDATED=False) and the updated version (UPDATED=True).
+    Runs all four combinations of UPDATED x INCLUDE_FOREIGN.
     """
     return {
         "actions": [
             'ipython -c "import sys; sys.path.insert(0, \'src\'); import Table03; Table03.main()"',
-            'ipython -c "import sys; sys.path.insert(0, \'src\'); import Table03; Table03.main(UPDATED=True)"'
+            'ipython -c "import sys; sys.path.insert(0, \'src\'); import Table03; Table03.main(UPDATED=True)"',
+            'ipython -c "import sys; sys.path.insert(0, \'src\'); import Table03; Table03.main(INCLUDE_FOREIGN=True)"',
+            'ipython -c "import sys; sys.path.insert(0, \'src\'); import Table03; Table03.main(UPDATED=True, INCLUDE_FOREIGN=True)"',
         ],
         "file_dep": [
             "./src/Table03.py"
@@ -206,14 +208,23 @@ def task_generate_latex_doc():
             "./_output/updated_table02_sstable.tex",
             "./_output/updated_table02_corr.tex",
 
+            # Domestic-only tables (INCLUDE_FOREIGN=False)
             "./_output/table03.tex",
-            #"./_output/table03_figure.png",
             "./_output/table03_figure03.png",
             "./_output/table03_sstable.tex",
+            "./_output/updated_table03.tex",
+            "./_output/updated_table03_figure03.png",
+            "./_output/updated_table03_sstable.tex",
+            # Domestic + foreign tables (INCLUDE_FOREIGN=True)
+            "./_output/table03_intl.tex",
+            "./_output/table03_intl_figure03.png",
+            "./_output/table03_intl_sstable.tex",
+            "./_output/updated_table03_intl.tex",
+            "./_output/updated_table03_intl_figure03.png",
+            "./_output/updated_table03_intl_sstable.tex",
+            # Paper replication figures
             "./_output/figure01.png",
             "./_output/figure04.png",
-            "./_output/updated_table03.tex",
-            "./_output/updated_table03_sstable.tex",
         ],
         # Explicit task dependencies to guarantee plot_figures runs before this task
         "task_dep": ["plot_figures"],
