@@ -32,23 +32,16 @@ import Table02Prep
 
 def combine_bd_financials(UPDATED=False):
     """
-    Combine broker-dealer financial data from historical sources and, if UPDATED, from recent FRED data.
-    Input: UPDATED (bool) flag indicating whether to fetch updated data.
-    Output: A DataFrame containing combined broker-dealer financial data.
+    Load broker-dealer financial data (bd_fin_assets, bd_liabilities) from FRED.
+
+    Uses load_bd_financials() for the full date range so the end date is driven
+    by config.py rather than a hardcoded 2012Q4 ZIP archive.
+
+    UPDATED=False  → pull through config.END_DATE        (original 1960-2012 sample)
+    UPDATED=True   → pull through config.UPDATED_END_DATE (extended sample)
     """
-    bd_financials_historical = Table03Load.load_fred_past()
-    bd_financials_historical.index = pd.to_datetime(bd_financials_historical.index)
-    
-    if UPDATED:
-        bd_financials_recent = Table03Load.load_bd_financials()  
-        bd_financials_recent.index = pd.to_datetime(bd_financials_recent.index)
-        start_date = pd.to_datetime(config.END_DATE)
-        bd_financials_recent = bd_financials_recent[bd_financials_recent.index > start_date]
-        bd_financials_combined = pd.concat([bd_financials_historical, bd_financials_recent])
-    else:
-        bd_financials_combined = bd_financials_historical
-    
-    return bd_financials_combined    
+    end_date = config.UPDATED_END_DATE if UPDATED else config.END_DATE
+    return Table03Load.load_bd_financials(end=end_date)
 
 def prep_dataset(dataset, UPDATED=False):
     """
@@ -77,6 +70,7 @@ def prep_dataset(dataset, UPDATED=False):
     print(f"[PREP] Unique gvkeys in raw data: {dataset['gvkey'].nunique() if 'gvkey' in dataset.columns else 'N/A'}")
     print(f"[PREP] Quarterly sector totals before BD merge: {len(aggregated_dataset)} quarters")
     bd_financials_combined = combine_bd_financials(UPDATED=UPDATED)
+    print(f"[PREP] BD financials: {bd_financials_combined.index.min().date()} to {bd_financials_combined.index.max().date()} ({len(bd_financials_combined)} quarters)")
     aggregated_dataset = aggregated_dataset.merge(bd_financials_combined, left_on='datafqtr', right_index=True)
     if not UPDATED:
         aggregated_dataset = aggregated_dataset[
@@ -401,16 +395,16 @@ def format_final_table(corrA, corrB):
     full_table = pd.concat([panelA_title, corrA, panelB_title, panelB_combined])
     return full_table
 
-def convert_and_export_tables_to_latex(corrA, corrB, UPDATED=False):
+def convert_and_export_tables_to_latex(corrA, corrB, UPDATED=False, INCLUDE_FOREIGN=False):
     """
     Converts correlation tables to LaTeX format and exports the result as a .tex file.
-    Input: corrA and corrB (DataFrames) and an UPDATED flag.
+    Input: corrA and corrB (DataFrames), UPDATED flag, and INCLUDE_FOREIGN flag.
     Output: A LaTeX file saved in the directory specified by config.OUTPUT_DIR.
-    The function rounds values, formats columns, and writes the LaTeX table to disk.
+    Filename: [updated_]table03[_intl].tex
     """
     corrA = corrA.round(2).fillna('')
     corrB = corrB.round(2).fillna('')
-    caption = "Updated" if UPDATED else "Original"
+    caption = ("Updated International" if INCLUDE_FOREIGN else "Updated") if UPDATED else ("International" if INCLUDE_FOREIGN else "Original")
     column_format = 'l' + 'c' * (len(corrA.columns))
     header_row = " & " + " & ".join(corrA.columns) + " \\\\"
     panelA_rows = "\n".join([f"{index} & " + " & ".join(corrA.loc[index].astype(str)) + " \\\\" for index in corrA.index])
@@ -439,21 +433,28 @@ def convert_and_export_tables_to_latex(corrA, corrB, UPDATED=False):
     }}
     \end{{table}}
     """
-    outfile = config.OUTPUT_DIR / ("updated_table03.tex" if UPDATED else "table03.tex")
+    prefix = "updated_" if UPDATED else ""
+    intl = "_intl" if INCLUDE_FOREIGN else ""
+    outfile = config.OUTPUT_DIR / f"{prefix}table03{intl}.tex"
     with open(outfile, 'w', encoding='utf-8') as f:
         f.write(full_latex)
 
-def main(UPDATED=False):
+def main(UPDATED=False, INCLUDE_FOREIGN=False):
     """
     Main function to execute the entire data processing pipeline for Table 03.
-    Input: UPDATED (bool) flag to determine if updated data should be used.
-    Output: Generates and exports a formatted correlation table in LaTeX format.
-    The function connects to WRDS, processes primary dealer data, calculates ratios and factors,
-    merges with macro variables, and exports summary statistics, figures, and correlation matrices.
+
+    Parameters
+    ----------
+    UPDATED        : bool  Use extended sample through config.UPDATED_END_DATE (default False).
+    INCLUDE_FOREIGN: bool  Include international primary dealers via Worldscope (default False).
+                           When False, only domestic (Compustat) PDs are used — output files
+                           are named table03.tex / updated_table03.tex.
+                           When True, foreign PDs are appended — output files are named
+                           table03_intl.tex / updated_table03_intl.tex.
     """
     db = wrds.Connection(wrds_username=config.WRDS_USERNAME)
     print(f"\n{'='*60}")
-    print(f"TABLE 03 PIPELINE  (UPDATED={UPDATED})")
+    print(f"TABLE 03 PIPELINE  (UPDATED={UPDATED}, INCLUDE_FOREIGN={INCLUDE_FOREIGN})")
     print(f"Sample target: 1970Q1 – {'2012Q4' if not UPDATED else config.UPDATED_END_DATE}")
     print(f"{'='*60}")
 
@@ -478,20 +479,23 @@ def main(UPDATED=False):
         print(f"[STEP 1] WARNING — no Compustat data for: {empty_domestic}")
 
     # --- Foreign primary dealers (MNEM-identified, queried via Worldscope) ---
-    print("\n[STEP 2] Loading foreign primary dealers from FOREIGN CSV...")
-    foreign_dealers = Table03Load.load_foreign_dealers()
-    if not foreign_dealers.empty:
-        print(f"[STEP 2] Querying Worldscope for {len(foreign_dealers)} foreign PD records...")
-        foreign_dataset, foreign_empty = Table03Load.fetch_data_for_international_tickers(foreign_dealers, db)
-        if foreign_empty:
-            print(f"[STEP 2] No Worldscope data found for MNEMs: {foreign_empty}")
-        if not foreign_dataset.empty:
-            print(f"[STEP 2] Foreign firm-quarters fetched: {len(foreign_dataset)}")
-            dataset = pd.concat([dataset, foreign_dataset], axis=0, ignore_index=True)
+    if INCLUDE_FOREIGN:
+        print("\n[STEP 2] Loading foreign primary dealers from FOREIGN CSV...")
+        foreign_dealers = Table03Load.load_foreign_dealers()
+        if not foreign_dealers.empty:
+            print(f"[STEP 2] Querying Worldscope for {len(foreign_dealers)} foreign PD records...")
+            foreign_dataset, foreign_empty = Table03Load.fetch_data_for_international_tickers(foreign_dealers, db)
+            if foreign_empty:
+                print(f"[STEP 2] No Worldscope data found for MNEMs: {foreign_empty}")
+            if not foreign_dataset.empty:
+                print(f"[STEP 2] Foreign firm-quarters fetched: {len(foreign_dataset)}")
+                dataset = pd.concat([dataset, foreign_dataset], axis=0, ignore_index=True)
+            else:
+                print("[STEP 2] No foreign data fetched; proceeding with domestic only.")
         else:
-            print("[STEP 2] No foreign data fetched; proceeding with domestic only.")
+            print("[STEP 2] No foreign dealer file found; skipping.")
     else:
-        print("[STEP 2] No foreign dealer file found; skipping.")
+        print("\n[STEP 2] INCLUDE_FOREIGN=False — skipping foreign dealer fetch.")
 
     print(f"\n[STEP 3] Preparing and aggregating PD data to quarterly sector totals...")
     prep_datast = prep_dataset(dataset, UPDATED=UPDATED)
@@ -510,15 +514,15 @@ def main(UPDATED=False):
     panelB = create_panelB(factors_dataset, macro_dataset, UPDATED=UPDATED)
     
     print(f"\n[STEP 8] Computing summary statistics and figures...")
-    Table03Analysis.create_summary_stat_table_for_data(panelB, UPDATED=UPDATED)
-    Table03Analysis.plot_figure03(ratio_dataset, macro_dataset, UPDATED=UPDATED)
-    Table03Analysis.plot_figure02(ratio_dataset, calculate_correlation_panelA(panelA), UPDATED=UPDATED)
+    Table03Analysis.create_summary_stat_table_for_data(panelB, UPDATED=UPDATED, INCLUDE_FOREIGN=INCLUDE_FOREIGN)
+    Table03Analysis.plot_figure03(ratio_dataset, macro_dataset, UPDATED=UPDATED, INCLUDE_FOREIGN=INCLUDE_FOREIGN)
+    Table03Analysis.plot_figure02(ratio_dataset, calculate_correlation_panelA(panelA, UPDATED=UPDATED), UPDATED=UPDATED, INCLUDE_FOREIGN=INCLUDE_FOREIGN)
 
     print(f"\n[STEP 9] Computing correlation matrices...")
-    correlation_panelA = calculate_correlation_panelA(panelA)
-    correlation_panelB = calculate_correlation_panelB(panelB)
+    correlation_panelA = calculate_correlation_panelA(panelA, UPDATED=UPDATED)
+    correlation_panelB = calculate_correlation_panelB(panelB, UPDATED=UPDATED)
     formatted_table = format_final_table(correlation_panelA, correlation_panelB)
-    convert_and_export_tables_to_latex(correlation_panelA, correlation_panelB, UPDATED=UPDATED)
+    convert_and_export_tables_to_latex(correlation_panelA, correlation_panelB, UPDATED=UPDATED, INCLUDE_FOREIGN=INCLUDE_FOREIGN)
     print(f"\n{'='*60}")
     print("FINAL TABLE (as formatted for LaTeX):")
     print(f"{'='*60}")

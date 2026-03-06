@@ -253,7 +253,7 @@ def main():
     ))
 
     ########################################################
-    # Table 3 Replication
+    # Table 3 Replication (Domestic Only)
     ########################################################
     latex_lines.append(r"\section{Table 3 Replication}")
 
@@ -264,35 +264,90 @@ def main():
     # 1) table03.tex => no shrink
     latex_lines.extend(build_table_env_no_shrink(
         output_dir / "table03.tex",
-        "Table 3(Replication)"
+        "Table 3 Replication (Domestic Primary Dealers)"
     ))
     # 2) table03_figure03.png => figure
     latex_lines.extend(build_figure_env(
         "table03_figure03.png",
-        "Variable Trend Chart"
+        "Variable Trend Chart (Domestic)"
     ))
     # 3) table03_sstable => shrink
     latex_lines.extend(build_table_env_shrink(
         output_dir / "table03_sstable.tex",
-        "Table 3 Descriptive Statistics"
+        "Table 3 Descriptive Statistics (Domestic)"
     ))
 
     ########################################################
-    # Table 3 (Updated)
+    # Table 3 (Updated, Domestic Only)
     ########################################################
     latex_lines.append(r"\newpage")
     latex_lines.append(r"\section{Table 3 (Updated)}")
-    latex_lines.append("Below is the Table 3 result calculated using updated data.")
+    latex_lines.append("Below is the Table 3 result calculated using updated data through 2020.")
 
     # 1) updated_table03.tex => no shrink
     latex_lines.extend(build_table_env_no_shrink(
         output_dir / "updated_table03.tex",
-        "Table 3(Updated)"
+        "Table 3 Updated (Domestic Primary Dealers)"
     ))
-    # 2) updated_table03_sstable => shrink
+    # 2) updated_table03_figure03.png => figure
+    latex_lines.extend(build_figure_env(
+        "updated_table03_figure03.png",
+        "Variable Trend Chart (Domestic, Updated)"
+    ))
+    # 3) updated_table03_sstable => shrink
     latex_lines.extend(build_table_env_shrink(
         output_dir / "updated_table03_sstable.tex",
-        "Table 3 Descriptive Statistics(Updated)"
+        "Table 3 Descriptive Statistics (Domestic, Updated)"
+    ))
+
+    ########################################################
+    # Table 3 Replication (Domestic + Foreign)
+    ########################################################
+    latex_lines.append(r"\section{Table 3 Replication (Domestic + Foreign Primary Dealers)}")
+    latex_lines.append(
+        "The following replicates Table 3 including both domestic and international primary dealers "
+        "sourced from Worldscope via Datastream MNEMs."
+    )
+
+    # 1) table03_intl.tex => no shrink
+    latex_lines.extend(build_table_env_no_shrink(
+        output_dir / "table03_intl.tex",
+        "Table 3 Replication (Domestic + Foreign Primary Dealers)"
+    ))
+    # 2) table03_intl_figure03.png => figure
+    latex_lines.extend(build_figure_env(
+        "table03_intl_figure03.png",
+        "Variable Trend Chart (Domestic + Foreign)"
+    ))
+    # 3) table03_intl_sstable => shrink
+    latex_lines.extend(build_table_env_shrink(
+        output_dir / "table03_intl_sstable.tex",
+        "Table 3 Descriptive Statistics (Domestic + Foreign)"
+    ))
+
+    ########################################################
+    # Table 3 (Updated, Domestic + Foreign)
+    ########################################################
+    latex_lines.append(r"\section{Table 3 (Updated, Domestic + Foreign Primary Dealers)}")
+    latex_lines.append(
+        "Below is the Table 3 result including international primary dealers, "
+        "using updated data through 2020."
+    )
+
+    # 1) updated_table03_intl.tex => no shrink
+    latex_lines.extend(build_table_env_no_shrink(
+        output_dir / "updated_table03_intl.tex",
+        "Table 3 Updated (Domestic + Foreign Primary Dealers)"
+    ))
+    # 2) updated_table03_intl_figure03.png => figure
+    latex_lines.extend(build_figure_env(
+        "updated_table03_intl_figure03.png",
+        "Variable Trend Chart (Domestic + Foreign, Updated)"
+    ))
+    # 3) updated_table03_intl_sstable => shrink
+    latex_lines.extend(build_table_env_shrink(
+        output_dir / "updated_table03_intl_sstable.tex",
+        "Table 3 Descriptive Statistics (Domestic + Foreign, Updated)"
     ))
 
     ########################################################

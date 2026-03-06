@@ -139,14 +139,22 @@ def load_macro_data(from_cache):
                                               })
     return macro_data
 
-def load_bd_financials():
+def load_bd_financials(end=None):
     """
-    Function to load broker-dealer financial data from FRED.
-    
-    Returns:
-      bd_financials (DataFrame): Contains financial assets and liabilities of security brokers and dealers.
+    Load broker-dealer financial data from FRED (BOGZ1FL664090005Q, BOGZ1FL664190005Q).
+
+    Parameters
+    ----------
+    end : str or None
+        End date for the FRED pull (e.g. '2025-01-01').  If None, pulls through today.
+        Pass config.END_DATE for the original sample, config.UPDATED_END_DATE for the
+        extended sample.
+
+    Returns
+    -------
+    bd_financials (DataFrame): columns bd_fin_assets, bd_liabilities; quarterly index.
     """
-    bd_financials = load_fred_bd_data(from_cache=False) 
+    bd_financials = load_fred_bd_data(from_cache=False, end=end)
     bd_financials = bd_financials.rename(columns={'BOGZ1FL664090005Q': 'bd_fin_assets',
                                                   'BOGZ1FL664190005Q': 'bd_liabilities'})
     bd_financials.index = pd.to_datetime(bd_financials.index)
@@ -190,7 +198,8 @@ def load_fred_past(url=URL_FRED_2013, data_dir=DATA_DIR, prn_file_name='ltab127d
 
         df.index = df.index.astype(str)
         df.index = df.index.str[:4] + 'Q' + df.index.str[5]
-        df = df.loc['1968Q4':'2012Q4']
+        # No hardcoded date slice — use all data available in the ZIP archive.
+        # (The 2013 Fed ZIP covers up to 2012Q4; the slice was redundant.)
         df.index = df.index.to_series().apply(quarter_to_date)
         df.index.name = 'datafqtr'
 
@@ -373,21 +382,18 @@ def _fetch_intl_financial_data(mnem, start_date, end_date, db):
     Pull annual balance-sheet fundamentals from WRDS Worldscope for a single
     international company identified by its Datastream MNEM code.
 
-    Worldscope item codes used
-    --------------------------
-    item6100  Datastream code (MNEM) — company identifier
-    item6001  Fiscal year (integer, e.g. 2005)
-    item2999  WC02999: Total Assets (millions, reporting currency)
-    item3501  WC03501: Common Equity (millions, reporting currency)
-    item8001  WC08001: Market Capitalisation (millions, reporting currency)
+    Lookup chain (confirmed via test.ipynb)
+    ----------------------------------------
+    1. tr_ds_equities.wrds_ds_names          dsmnem -> infocode
+    2. wrdsapps_link_datastream_wscope.ds2ws_linktable  infocode -> code
+    3. tr_worldscope.wrds_ws_funda           code, year_, freq='A' -> item2999, item3501
+    4. tr_worldscope.wrds_ws_stock           code, year_, freq='A' -> item8001 (market cap)
 
-    NOTE — schema verification
-    --------------------------
-    WRDS may expose Worldscope under a different schema name depending on your
-    institution's subscription. If this query fails, run:
-        db.list_schemas()
-        db.list_tables(library='worldscope')
-    to find the correct schema and table name, then update the FROM clause below.
+    Item codes
+    ----------
+    item2999  WC02999 : Total Assets
+    item3501  WC03501 : Common Equity
+    item8001  WC08001 : Market Capitalisation (in wrds_ws_stock, not wrds_ws_funda)
 
     NOTE — currency
     ---------------
@@ -400,7 +406,7 @@ def _fetch_intl_financial_data(mnem, start_date, end_date, db):
 
     Parameters
     ----------
-    mnem       : str   Datastream MNEM, e.g. 'H:AAB'
+    mnem       : str   Datastream MNEM, e.g. 'BARC', 'H:AAB', 'D:DBK'
     start_date : str   'MM/DD/YYYY'
     end_date   : str   'MM/DD/YYYY' or 'Current'
     db         : wrds.Connection
@@ -420,30 +426,43 @@ def _fetch_intl_financial_data(mnem, start_date, end_date, db):
     start_year = pd.to_datetime(start_date).year
     end_year = pd.to_datetime(end_date).year
 
+    # DISTINCT ON (f.year_) + ORDER BY f.year_, f.seq picks the lowest seq
+    # (primary annual report) when multiple restatement rows exist for a year.
     query = f"""
-        SELECT item6001 AS fiscal_year,
-               item2999 AS total_assets,
-               item3501 AS book_equity,
-               item8001 AS market_equity
-        FROM worldscope.wrds_ws_funda
-        WHERE item6100 = '{mnem}'
-          AND item6001 BETWEEN {start_year} AND {end_year}
-        ORDER BY item6001
+        SELECT DISTINCT ON (f.year_)
+               f.year_    AS fiscal_year,
+               f.item2999 AS total_assets,
+               f.item3501 AS book_equity,
+               s.item8001 AS market_equity
+        FROM tr_worldscope.wrds_ws_funda f
+        LEFT JOIN tr_worldscope.wrds_ws_stock s
+            ON  f.code  = s.code
+            AND f.year_ = s.year_
+            AND s.freq  = 'A'
+        WHERE f.code IN (
+            SELECT l.code
+            FROM tr_ds_equities.wrds_ds_names n
+            JOIN wrdsapps_link_datastream_wscope.ds2ws_linktable l
+                ON n.infocode = l.infocode
+            WHERE n.dsmnem = '{mnem}'
+        )
+        AND f.year_ BETWEEN {start_year} AND {end_year}
+        AND f.freq = 'A'
+        ORDER BY f.year_, f.seq
     """
     try:
         data = db.raw_sql(query)
     except Exception as e:
         print(f"Worldscope query failed for {mnem}: {e}")
-        print("  Check schema/table name — see NOTE in _fetch_intl_financial_data docstring.")
         return pd.DataFrame()
 
     if data.empty:
         print(f"No Worldscope data found for {mnem} ({start_year}–{end_year})")
         return pd.DataFrame()
 
-    # book_debt mirrors the domestic Compustat formula: atq - ceqq = total liabilities
+    # book_debt mirrors the domestic Compustat formula: total_assets - book_equity
     data['book_debt'] = data['total_assets'] - data['book_equity']
-    data = data.dropna(subset=['total_assets', 'book_equity', 'market_equity'])
+    data = data.dropna(subset=['total_assets', 'book_equity'])
 
     return _annual_to_quarterly(data, mnem)
 
