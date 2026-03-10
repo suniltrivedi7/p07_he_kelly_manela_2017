@@ -1,6 +1,6 @@
 # Intermediary Asset Pricing Replication Project
 
-This repository contains our final project for replicating tables from the paper "Intermediary Asset Pricing: New Evidence from Many Asset Classes." Our goal is to reproduce key tables (Table 2 and Table 3) from the paper using data from CRSP, Compustat, and Datastream—and to update these results with the latest available data.
+This repository contains our final project for replicating tables and figures from the paper "Intermediary Asset Pricing: New Evidence from Many Asset Classes." Our goal is to reproduce key tables (Table 2 and Table 3) and figures (Figure 1 and Figure 4) from the paper using data from CRSP, Compustat, and Datastream and to update these results with the latest available data.
 
 ---
 
@@ -10,18 +10,22 @@ The paper argues that capital shocks to financial intermediaries can explain cro
 - **Building Risk Factors:** We construct risk factors using financial intermediaries' capital ratios.
 - **Replicating Table 2:** This table shows the relative size of major market makers by calculating monthly ratios of total assets, book debt, book equity, and market equity relative to different market groups, and then averaging these ratios over time.
 - **Replicating Table 3:**
-  - *Panel A:* Uses data from 1970Q1 to 2012Q4 to compute the Market Capital Ratio, Book Capital Ratio, and AEM Leverage Ratio, and explores the correlations among these ratios and key economic variables (such as E/P, unemployment, GDP, financial conditions, and market volatility).
+  - *Panel A:* Computes the Market Capital Ratio, Book Capital Ratio, and AEM Leverage Ratio, and explores the correlations among these ratios and key economic variables.
   - *Panel B:* Constructs risk factors from the ratios in Panel A and analyzes their correlations with each other and with the growth rates of various economic indicators.
+- **Replicating Figure 1:** The Intermediary Capital Ratio (ICR) and the Intermediary Capital Risk Factor - AR(1) innovations of the ICR scaled by the lagged captial ratio.
+- **Replicating Figure 4:**
+  - *Panel A*: The levels of the capital and leverage ratios.
+  - *Panel B*: Innovations in the state variables of Panel A.
 
 ---
 
 ## Data & Methodology
 
 - **Data Sources:**  
-  We modified the primary dealer list based on real data sources. The `ticks.csv` file was updated according to the corresponding gvkey codes.
+  We modified the primary dealer list based on real data sources and holding company information. The `ticks.csv` file was updated according to the corresponding gvkey codes.
   
 - **Modifications to Calculations:**  
-  We adjusted the calculation logic for important ratios and macroeconomic variables (e.g., key ratios and updated macro variable computations) based on the paper’s description, resulting in significant optimization of the replicated results for Table 3.
+  We adjusted the calculation logic for important ratios and macroeconomic variables (e.g., key ratios and updated macro variable computations) based on the paper’s description, resulting in significant optimization of the replicated results for the tables and figures.
   
 - **Output Generation:**  
   The reproduced table results are automatically generated as LaTeX (.tex) files and saved in the output directory. Further data analysis, including descriptive statistics, correlation analysis, and visualization of ratio trends, was also performed.
@@ -53,33 +57,17 @@ The paper argues that capital shocks to financial intermediaries can explain cro
 
 ---
 
-## Work Division
-
-- **Liu Junyuan:**  
-  - Developed the code for auto-generating the LaTeX summary document.
-  - Worked on replicating additional tables and figures from the paper.
-  - Enhanced table analysis scripts and improved the README file.
-
-- **Hanlu Ge:**  
-  - Modified the primary dealer list and updated `ticks.csv` based on real data sources.
-  - Developed the Jupyter Notebook showcasing data processing, ratio calculations, table generation, and analysis.
-  - Implemented the automation script (`dodo.py`) and wrote tests to ensure accurate replication of the tables.
-
-Regular and transparent communication was maintained throughout the project to ensure that both team members remained aligned and met project goals.
-
----
-
 ## Setup & Usage
 
 1. **Clone the Repository:**
    ```bash
-   git clone https://github.com/Junyuanxx/Final-Project-32900.git
-   cd Final-Project-32900
+   git clone <link-to-repository>
+   cd p07_he_kelly_manela_2017
 
 2. **Create and Activate the Virtual Environment:**
    ```bash
-   python -m venv env
-   source env/bin/activate  # On Windows, use `env\Scripts\activate`
+   conda create --name <env-name>
+   conda activate <env-name>
 
 3. **Install Dependencies:**
    ```bash
@@ -87,7 +75,6 @@ Regular and transparent communication was maintained throughout the project to e
 
 4. **Run the Project:**
    ```bash
-   set PYTHONWARNINGS=ignore::FutureWarning
    doit
 
 ## Contact
