@@ -165,25 +165,25 @@ def task_pull_fred_data():
     }
 
 
-# def task_run_notebook():
-#     """
-#     Task: Execute the FinalCombinedWalkthrough.ipynb notebook.
-#     First clear the notebook outputs, then execute and save it to OUTPUT_DIR.
-#     """
-#     executed_notebook = Path(OUTPUT_DIR) / "FinalCombinedWalkthrough_executed.ipynb"
-#     return {
-#         "actions": [
-#             f'jupyter nbconvert --ClearOutputPreprocessor.enabled=True --inplace ./src/FinalCombinedWalkthrough.ipynb',
-#             f'jupyter nbconvert --to notebook --execute ./src/FinalCombinedWalkthrough.ipynb --output "{executed_notebook}"'
-#         ],
-#         "file_dep": [
-#             "./src/FinalCombinedWalkthrough.ipynb"
-#         ],
-#         "targets": [
-#             str(executed_notebook)
-#         ],
-#         "clean": []
-#     }
+def task_run_notebook():
+    """
+    Task: Execute the FinalCombinedWalkthrough.ipynb notebook.
+    First clear the notebook outputs, then execute and save it to OUTPUT_DIR.
+    """
+    executed_notebook = Path(OUTPUT_DIR) / "hkm_walkthrough_executed.ipynb"
+    return {
+        "actions": [
+            f'jupyter nbconvert --ClearOutputPreprocessor.enabled=True --inplace ./src/hkm_walkthrough.ipynb',
+            f'jupyter nbconvert --to notebook --execute ./src/hkm_walkthrough.ipynb --output "{executed_notebook}"'
+        ],
+        "file_dep": [
+            "./src/hkm_walkthrough.ipynb"
+        ],
+        "targets": [
+            str(executed_notebook)
+        ],
+        "clean": []
+    }
 
 def task_generate_latex_doc():
     """
