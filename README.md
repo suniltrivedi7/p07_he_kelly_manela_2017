@@ -73,7 +73,19 @@ The paper argues that capital shocks to financial intermediaries can explain cro
    ```bash
    pip install -r requirements.txt
 
-4. **Run the Project:**
+4. **Create .env file:**
+    
+    According to the .env.example file, replicate this with your personal credentials for WRDS access. Start and end date fields are hard-coded according to the parameters in He, Kelly, Manela. The updated end date corresponds to Primary Dealer holding company gvkey codes from Giannone and Robotti.
+    ```bash
+    WRDS_USERNAME="xxxxxxxx"
+    DATA_DIR=_data
+    OUTPUT_DIR=_output
+    START_DATE=1960-01-01
+    END_DATE=2012-12-31
+    UPDATED_END_DATE=2020-12-31
+
+
+5. **Run the Project:**
    ```bash
    doit
 

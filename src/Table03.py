@@ -223,7 +223,12 @@ def macro_variables(db, from_cache=True, UPDATED=False):
     )
 
     # Load the CRSP value-weighted index data and convert the date column to datetime
-    value_wtd_indx = Table03Load.pull_CRSP_Value_Weighted_Index(db)
+    # When UPDATED, bypass cache (which may only cover through 2012) and re-query WRDS
+    # through the updated end date so the inner merge doesn't truncate the sample.
+    crsp_end = config.UPDATED_END_DATE if UPDATED else None
+    value_wtd_indx = Table03Load.pull_CRSP_Value_Weighted_Index(
+        db, from_cache=(not UPDATED), end_date=crsp_end
+    )
     value_wtd_indx['date'] = pd.to_datetime(value_wtd_indx['date'])
     
     # Compute market volatility using logarithmic returns:
