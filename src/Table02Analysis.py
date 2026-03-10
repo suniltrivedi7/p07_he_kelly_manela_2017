@@ -212,32 +212,12 @@ def compute_table2_ratios(monthly_totals: dict, start: str, end: str) -> pd.Data
         aligned = pd_m[KEY_COLS].join(g[KEY_COLS], how="inner",
                                       lsuffix="_pd", rsuffix="_g")
 
-        print(f"\n[RATIO DIAGNOSTICS] Group={grp}")
-        print(f"  aligned months: {len(aligned)}")
-        print(f"  PD total_assets missing: {aligned['total_assets_pd'].isna().mean():.3%}")
-        print(f"  {grp} total_assets missing: {aligned['total_assets_g'].isna().mean():.3%}")
-
         for col in KEY_COLS:
             g_vals = aligned[f"{col}_g"].copy()
             if grp == "BD":
                 g_vals = g_vals.fillna(0)
             denom = aligned[f"{col}_pd"] + g_vals
-            denom0 = (denom == 0).mean()
-            denom_na = denom.isna().mean()
             ratio = aligned[f"{col}_pd"] / denom.replace(0, np.nan)
-            r_na = ratio.isna().mean()
-            r_gt1 = (ratio > 1).mean()
-            r_lt0 = (ratio < 0).mean()
-
-            print(f"  {col}: denom==0 {denom0:.3%}, denom NA {denom_na:.3%}, "
-                  f"ratio NA {r_na:.3%}, ratio>1 {r_gt1:.3%}, ratio<0 {r_lt0:.3%}")
-
-            if ratio.notna().any():
-                top = ratio.sort_values(ascending=False).head(3)
-                bot = ratio.sort_values(ascending=True).head(3)
-                print(f"    top3: {[(str(i.date()), round(float(v), 4)) for i, v in top.items()]}")
-                print(f"    bot3: {[(str(i.date()), round(float(v), 4)) for i, v in bot.items()]}")
-
             out[f"{col}_{grp}"] = ratio
 
     ratios = pd.DataFrame(out)
@@ -245,9 +225,6 @@ def compute_table2_ratios(monthly_totals: dict, start: str, end: str) -> pd.Data
     ratios = ratios.loc[
         (ratios.index >= pd.to_datetime(start)) & (ratios.index <= pd.to_datetime(end))
     ]
-
-    print("\n[OVERALL RATIO MISSING SHARE]")
-    print(ratios.isna().mean().sort_values(ascending=False).head(12))
 
     return ratios
 
@@ -273,17 +250,6 @@ def summarize_table2(ratios: pd.DataFrame, UPDATED=False) -> pd.DataFrame:
     rows = []
     for s, e, name in periods:
         sub = ratios.loc[pd.to_datetime(s):pd.to_datetime(e)]
-        nmonths = len(sub)
-        complete = sub.notna().all(axis=1).mean() if nmonths else np.nan
-
-        print(f"\n[PERIOD DIAGNOSTICS] {name}")
-        print(f"  months in period: {nmonths}")
-        print(f"  share months complete across ALL columns: {complete:.3f}")
-
-        preview_cols = [c for c in sub.columns if c.startswith("total_assets_")]
-        if nmonths and preview_cols:
-            print("  total_assets means:", sub[preview_cols].mean().to_dict())
-
         rows.append(pd.Series(sub.mean(numeric_only=True), name=name))
 
     table = pd.DataFrame(rows)

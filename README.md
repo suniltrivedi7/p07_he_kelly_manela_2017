@@ -66,7 +66,7 @@ The paper argues that capital shocks to financial intermediaries can explain cro
 
 2. **Create and Activate the Virtual Environment:**
    ```bash
-   conda create --name <env-name>
+   conda create --name <env-name> python=3.12
    conda activate <env-name>
 
 3. **Install Dependencies:**
