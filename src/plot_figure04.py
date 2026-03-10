@@ -18,6 +18,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 import argparse
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -30,6 +31,7 @@ import config
 import Table03
 import Table02Prep
 import Table03Load
+from statsmodels.tsa.seasonal import seasonal_decompose
 
 # NBER recession dates — same list used across the project
 NBER_RECESSIONS = [
@@ -221,10 +223,14 @@ def plot_figure04(ratio_dataset, factors_dataset, UPDATED=False):
     print(f"Figure 4 saved to: {outfile}")
 
 
-def _build_datasets(UPDATED=False):
+def _build_datasets(UPDATED=False, INCLUDE_FOREIGN=False):
     """
     Runs the Table 3 data pipeline and returns (ratio_dataset, factors_dataset).
     Opens and closes its own WRDS connection.
+
+    Args:
+        UPDATED        : bool — if True, extends the sample to UPDATED_END_DATE.
+        INCLUDE_FOREIGN: bool — if True, appends foreign primary dealer data.
     """
     db = wrds.Connection(wrds_username=config.WRDS_USERNAME)
 
@@ -234,16 +240,17 @@ def _build_datasets(UPDATED=False):
     )
     dataset, _ = Table03Load.fetch_data_for_tickers(prim_dealers, db)
 
-    # Foreign primary dealers (if available)
-    foreign_dealers = Table03Load.load_foreign_dealers()
-    if not foreign_dealers.empty:
-        foreign_dataset, foreign_empty = Table03Load.fetch_data_for_international_tickers(
-            foreign_dealers, db
-        )
-        if foreign_empty:
-            print(f"No Worldscope data found for MNEMs: {foreign_empty}")
-        if not foreign_dataset.empty:
-            dataset = pd.concat([dataset, foreign_dataset], axis=0, ignore_index=True)
+    # Foreign primary dealers (only if requested)
+    if INCLUDE_FOREIGN:
+        foreign_dealers = Table03Load.load_foreign_dealers()
+        if not foreign_dealers.empty:
+            foreign_dataset, foreign_empty = Table03Load.fetch_data_for_international_tickers(
+                foreign_dealers, db
+            )
+            if foreign_empty:
+                print(f"No Worldscope data found for MNEMs: {foreign_empty}")
+            if not foreign_dataset.empty:
+                dataset = pd.concat([dataset, foreign_dataset], axis=0, ignore_index=True)
 
     db.close()
 
@@ -251,11 +258,25 @@ def _build_datasets(UPDATED=False):
     ratio_dataset   = Table03.aggregate_ratios(prep_datast)
     factors_dataset = Table03.convert_ratios_to_factors(ratio_dataset)
 
+    # Override AEM leverage and factor using the historical 2013 ZIP archive data
+    # (same source as the original paper's UPDATED=False pipeline).  The live FRED
+    # API has revised historical values that shift the AEM series; the ZIP archive
+    # preserves the original vintage covering 1968Q4-2012Q4.
+    Path(config.DATA_DIR, 'pulled').mkdir(parents=True, exist_ok=True)
+    aem_raw = Table03Load.load_fred_past()
+    aem_raw = aem_raw.loc['1968-12-31':'2012-12-31']
+    aem_leverage_full = aem_raw['bd_fin_assets'] / (aem_raw['bd_fin_assets'] - aem_raw['bd_liabilities'])
+    leverage_growth = aem_leverage_full.pct_change().fillna(0)
+    decomp = seasonal_decompose(leverage_growth, model='additive', period=4)
+    aem_factor_full = leverage_growth - decomp.seasonal
+    ratio_dataset['aem_leverage']             = aem_leverage_full.reindex(ratio_dataset.index)
+    factors_dataset['aem_leverage_factor']    = aem_factor_full.reindex(factors_dataset.index)
+
     return ratio_dataset, factors_dataset
 
 
-def main(UPDATED=False):
-    ratio_dataset, factors_dataset = _build_datasets(UPDATED=UPDATED)
+def main(UPDATED=False, INCLUDE_FOREIGN=False):
+    ratio_dataset, factors_dataset = _build_datasets(UPDATED=UPDATED, INCLUDE_FOREIGN=INCLUDE_FOREIGN)
     plot_figure04(ratio_dataset, factors_dataset, UPDATED=UPDATED)
 
 

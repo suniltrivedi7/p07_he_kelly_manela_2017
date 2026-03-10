@@ -34,14 +34,23 @@ def combine_bd_financials(UPDATED=False):
     """
     Load broker-dealer financial data (bd_fin_assets, bd_liabilities) from FRED.
 
-    Uses load_bd_financials() for the full date range so the end date is driven
-    by config.py rather than a hardcoded 2012Q4 ZIP archive.
-
-    UPDATED=False  → pull through config.END_DATE        (original 1960-2012 sample)
-    UPDATED=True   → pull through config.UPDATED_END_DATE (extended sample)
+    UPDATED=False  → use historical 2013 ZIP archive (original data vintage, 1968Q4-2012Q4)
+    UPDATED=True   → use ZIP archive through 2012Q4, then append live FRED data through
+                     config.UPDATED_END_DATE.
     """
-    end_date = config.UPDATED_END_DATE if UPDATED else config.END_DATE
-    return Table03Load.load_bd_financials(end=end_date)
+    bd_financials_historical = Table03Load.load_fred_past()
+    bd_financials_historical.index = pd.to_datetime(bd_financials_historical.index)
+
+    if UPDATED:
+        bd_financials_recent = Table03Load.load_bd_financials(end=config.UPDATED_END_DATE)
+        bd_financials_recent.index = pd.to_datetime(bd_financials_recent.index)
+        start_date = pd.to_datetime(config.END_DATE)
+        bd_financials_recent = bd_financials_recent[bd_financials_recent.index > start_date]
+        bd_financials_combined = pd.concat([bd_financials_historical, bd_financials_recent])
+    else:
+        bd_financials_combined = bd_financials_historical
+
+    return bd_financials_combined
 
 def prep_dataset(dataset, UPDATED=False):
     """
