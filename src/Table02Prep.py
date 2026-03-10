@@ -1,318 +1,505 @@
 """
 Table02Prep.py
 
-Generates Table 02 for the intermediary asset pricing replication. It reads manually curated datasets,
-fetches WRDS data for primary dealers and comparison groups, aggregates the data, and produces a final
-LaTeX output. This file no longer contains testing code; see Table02_testing.py for relevant tests.
+HKM Table 2 replication pipeline. Loads pre-pulled parquet data, builds
+month-end sector totals for PD, BD, Banks, and Cmpust. comparison groups,
+computes ratios, and exports the final table to LaTeX.
 """
 
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 import pandas as pd
+import numpy as np
 import wrds
 import config
-from datetime import datetime
-import matplotlib.pyplot as plt
-import numpy as np
 import Table02Analysis
+from datetime import datetime
 from pathlib import Path
+
+# Constants
+
+KEY_COLS = ["total_assets", "book_debt", "book_equity", "market_equity"]
+
+# GE (005047) held Kidder Peabody; Sears (006307) held Dean Witter.
+# Their non-financial consolidated assets inflate the PD numerator.
+NON_FINANCIAL_PD_GVKEYS = {"005047", "006307"}
+
+
+# Helpers
+
+def get_ccm_gvkey_universe(db, start_date: str, end_date: str) -> set[str]:
+    """Return gvkeys in the CCM link table during the sample window (US-incorporated only)."""
+    q = f"""
+        SELECT DISTINCT l.gvkey
+        FROM crsp.ccmxpf_lnkhist l
+        JOIN comp.company c ON l.gvkey = c.gvkey
+        WHERE l.gvkey IS NOT NULL
+          AND l.linktype LIKE 'L%%'
+          AND (l.linkprim = 'C' OR l.linkprim = 'P')
+          AND c.fic = 'USA'
+          AND (
+                (l.linkdt IS NULL OR l.linkdt <= '{end_date}')
+            AND (l.linkenddt IS NULL OR l.linkenddt >= '{start_date}')
+          )
+    """
+    ccm = db.raw_sql(q)
+    return set(ccm["gvkey"].astype(str).str.zfill(6).tolist())
+
+
+def get_comparison_group_gvkeys_from_wrds(db, sic_codes: list[int],
+                                           start_date: str, end_date: str) -> set[str]:
+    """Return gvkeys matching the given SIC codes from comp.funda (both INDL and FS format)."""
+    sic_str = ", ".join(f"'{s}'" for s in sic_codes)
+    q = f"""
+        SELECT DISTINCT f.gvkey
+        FROM comp.funda f
+        JOIN comp.company c ON f.gvkey = c.gvkey
+        WHERE (c.sic IN ({sic_str}) OR f.sich IN ({sic_str}))
+          AND c.fic = 'USA'
+          AND (f.indfmt = 'INDL' OR f.indfmt = 'FS')
+          AND f.datafmt = 'STD'
+          AND f.popsrc = 'D'
+          AND f.consol = 'C'
+          AND f.datadate BETWEEN '{start_date}' AND '{end_date}'
+    """
+    result = db.raw_sql(q)
+    return set(result["gvkey"].astype(str).str.zfill(6).tolist())
+
+
+def build_pd_active_schedule(merged_main: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
+    """
+    Return (gvkey, mdate) pairs where a PD gvkey is active and should be
+    excluded from the Banks comparison group during that month.
+    """
+    months = pd.date_range(pd.to_datetime(start), pd.to_datetime(end), freq="ME")
+    sample_end = pd.to_datetime(end)
+
+    mm = merged_main.copy()
+    mm["gvkey"] = mm["gvkey"].astype(str).str.zfill(6)
+    mm["start_dt"] = pd.to_datetime(mm["Start Date"], errors="coerce")
+    end_raw = mm["End Date"].replace("Current", pd.NA)
+    mm["end_dt"] = pd.to_datetime(end_raw, errors="coerce").fillna(sample_end)
+    mm = mm.dropna(subset=["start_dt", "end_dt"])
+
+    months_s = pd.Series(months, name="mdate")
+    excl_parts: list[pd.DataFrame] = []
+
+    for gvkey, grp in mm.groupby("gvkey"):
+        for _, row in grp.iterrows():
+            active = months_s[
+                (months_s >= row["start_dt"]) & (months_s <= row["end_dt"])
+            ].to_frame()
+            active["gvkey"] = gvkey
+            excl_parts.append(active[["gvkey", "mdate"]])
+
+    if not excl_parts:
+        return pd.DataFrame(columns=["gvkey", "mdate"])
+
+    return (
+        pd.concat(excl_parts, ignore_index=True)
+          .drop_duplicates()
+          .reset_index(drop=True)
+    )
+
+
+def _eom(dt: pd.Series) -> pd.Series:
+    """Convert timestamps to month-end timestamps."""
+    dt = pd.to_datetime(dt, errors="coerce")
+    return dt.dt.to_period("M").dt.to_timestamp("M")
+
+
+def _ensure_numeric(df, cols):
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+# Data Loading
 
 def clean_primary_dealers_data(fname):
     file_path = config.MANUAL_DATA / fname
     prim_dealers = pd.read_csv(file_path)
-    prim_dealers['End Date'] = prim_dealers['End Date'].fillna('Current')
-    prim_dealers = prim_dealers.dropna(subset=['gvkey'])
-    prim_dealers['gvkey'] = prim_dealers['gvkey'].astype(int)
-    date_cols = ['Start Date', 'End Date']
-    for col in date_cols:
-        prim_dealers[col] = pd.to_datetime(prim_dealers[col], errors='coerce')
-        prim_dealers[col] = prim_dealers[col].dt.strftime('%m/%d/%Y')
-    prim_dealers['End Date'] = prim_dealers['End Date'].fillna('Current')
-    if 'Unnamed: 0' in prim_dealers.columns:
-        prim_dealers = prim_dealers.drop(columns=['Unnamed: 0'])
+
+    prim_dealers["End Date"] = prim_dealers["End Date"].fillna("Current")
+    prim_dealers = prim_dealers.dropna(subset=["gvkey"])
+    prim_dealers["gvkey"] = prim_dealers["gvkey"].astype(int)
+
+    for col in ["Start Date", "End Date"]:
+        prim_dealers[col] = pd.to_datetime(prim_dealers[col], errors="coerce")
+        prim_dealers[col] = prim_dealers[col].dt.strftime("%m/%d/%Y")
+    prim_dealers["End Date"] = prim_dealers["End Date"].fillna("Current")
+
+    if "Unnamed: 0" in prim_dealers.columns:
+        prim_dealers = prim_dealers.drop(columns=["Unnamed: 0"])
+
     return prim_dealers
 
+
 def load_link_table(fname):
-    file_path = config.MANUAL_DATA / fname
-    link_hist = pd.read_csv(file_path)
-    return link_hist
+    return pd.read_csv(config.MANUAL_DATA / fname)
+
+
+# WRDS Query
 
 def fetch_financial_data(db, linktable, start_date, end_date, ITERATE=False):
-    pgvkeys = linktable['gvkey'].tolist()
+    """Pull Compustat fundq for a set of gvkeys; returns firm-level quarterly data."""
+    pgvkeys = linktable["gvkey"].tolist()
     results = pd.DataFrame()
+
     if ITERATE:
-        start_dates = linktable['Start Date'].tolist()
-        end_dates_list = linktable['End Date'].tolist()
-        end_date_parts = end_date.split("-")
-        end_date_mdy = f"{end_date_parts[1]}/{end_date_parts[2]}/{end_date_parts[0]}"
-        end_dates_list = [end_date_mdy if d == 'Current' else d for d in end_dates_list]
+        start_dt = pd.to_datetime(linktable["Start Date"], errors="coerce")
+        end_raw = linktable["End Date"].copy().replace("Current", pd.NA)
+        end_dt = pd.to_datetime(end_raw, errors="coerce")
 
-        start_dates_dt, end_dates_dt = [], []
-        for date in start_dates:
-            if len(date.split('/')[-1]) == 4:
-                start_dates_dt.append(datetime.strptime(date, '%m/%d/%Y'))
-            else:
-                start_dates_dt.append(datetime.strptime(date, '%m/%d/%y'))
+        start_dt = start_dt.fillna(pd.to_datetime(start_date, errors="coerce"))
+        end_dt = end_dt.fillna(pd.to_datetime(end_date, errors="coerce"))
 
-        for date in end_dates_list:
-            if len(date.split('/')[-1]) == 4:
-                end_dates_dt.append(datetime.strptime(date, '%m/%d/%Y'))
-            else:
-                end_dates_dt.append(datetime.strptime(date, '%m/%d/%y'))
+        good = start_dt.notna() & end_dt.notna()
+        if not good.all():
+            linktable = linktable.loc[good].reset_index(drop=True)
+            start_dt = start_dt.loc[good].reset_index(drop=True)
+            end_dt = end_dt.loc[good].reset_index(drop=True)
+            pgvkeys = linktable["gvkey"].tolist()
+
+        start_str = start_dt.dt.strftime("%Y-%m-%d")
+        end_str = end_dt.dt.strftime("%Y-%m-%d")
 
         for i, gvkey in enumerate(pgvkeys):
-            pgvkey_str = f"'{str(gvkey).zfill(6)}'"
+            pgvkey_str = f"'{str(int(gvkey)).zfill(6)}'"
             query = f"""
             SELECT datadate,
-                   CASE WHEN atq IS NULL OR atq = 0 THEN actq ELSE atq END AS total_assets,
-                   CASE WHEN ltq IS NULL OR ltq = 0 THEN lctq ELSE ltq END AS book_debt,
+                   atq AS total_assets,
+                   ltq AS book_debt,
                    COALESCE(teqq, ceqq + COALESCE(pstkq, 0) + COALESCE(mibnq, 0)) AS book_equity,
-                   cshoq*prccq AS market_equity, gvkey, conm
+                   (cshoq * prccq) AS market_equity,
+                   gvkey, conm, indfmt
             FROM comp.fundq AS cst
-            WHERE cst.gvkey={pgvkey_str}
-              AND cst.datadate BETWEEN '{start_dates_dt[i]}' AND '{end_dates_dt[i]}'
-              AND indfmt='INDL'
-              AND datafmt='STD'
-              AND popsrc='D'
-              AND consol='C'
+            WHERE cst.gvkey = {pgvkey_str}
+              AND cst.datadate BETWEEN '{start_str.iloc[i]}' AND '{end_str.iloc[i]}'
+              AND (indfmt = 'INDL' OR indfmt = 'FS')
+              AND datafmt='STD' AND popsrc='D' AND consol='C'
             """
             data = db.raw_sql(query)
-            if not data.empty and data.dropna(how="all").shape[1] > 0:
+            if not data.empty:
                 results = pd.concat([results, data], axis=0)
+
     else:
-        pgvkey_str = ','.join([f"'{str(key).zfill(6)}'" for key in pgvkeys])
+        pgvkey_str = ",".join([f"'{str(int(key)).zfill(6)}'" for key in pgvkeys])
         query = f"""
         SELECT datadate,
-               CASE WHEN atq IS NULL OR atq = 0 THEN actq ELSE atq END AS total_assets,
-               CASE WHEN ltq IS NULL OR ltq = 0 THEN lctq ELSE ltq END AS book_debt,
+               atq AS total_assets,
+               ltq AS book_debt,
                COALESCE(teqq, ceqq + COALESCE(pstkq, 0) + COALESCE(mibnq, 0)) AS book_equity,
-               cshoq*prccq AS market_equity, gvkey, conm
+               (cshoq * prccq) AS market_equity,
+               gvkey, conm, indfmt
         FROM comp.fundq AS cst
         WHERE cst.gvkey IN ({pgvkey_str})
           AND cst.datadate BETWEEN '{start_date}' AND '{end_date}'
-          AND indfmt='INDL'
-          AND datafmt='STD'
-          AND popsrc='D'
-          AND consol='C'
+          AND (indfmt = 'INDL' OR indfmt = 'FS')
+          AND datafmt='STD' AND popsrc='D' AND consol='C'
         """
         data = db.raw_sql(query)
-        if not data.empty and data.dropna(how="all").shape[1] > 0:
+        if not data.empty:
             results = pd.concat([results, data], axis=0)
+
     return results
 
-def get_comparison_group_data(db, linktable_df, start_date, end_date, ITERATE=False):
-    return fetch_financial_data(db, linktable_df, start_date, end_date, ITERATE=ITERATE)
 
-def read_in_manual_datasets():
-    script_dir = Path(__file__).resolve().parent
-    manual_dir = (script_dir / "../data_manual").resolve()
-    ticks_csv = manual_dir / 'ticks.csv'
-    link_csv = manual_dir / 'updated_linktable.csv'
-    ticks = pd.read_csv(ticks_csv, sep="|", engine="python", quoting=3, on_bad_lines='skip')
-    ticks['gvkey'] = ticks['gvkey'].fillna(0.0).astype(int)
-    ticks['Permco'] = ticks['Permco'].fillna(0.0).astype(int)
-    linktable = pd.read_csv(link_csv)
-    return ticks, linktable
+# Group Construction
 
-def pull_CRSP_Comp_Link_Table():
-    sql_query = """
-        SELECT 
-            gvkey, lpermco AS permco, linktype, linkprim, linkdt, linkenddt, tic
-        FROM 
-            ccmlinktable
-        WHERE 
-            substr(linktype,1,1)='L' 
-            AND (linkprim ='C' OR linkprim='P')
+def create_comparison_group_linktables(link_hist, merged_main,
+                                       ccm_gvkeys: set[str] | None = None,
+                                       wrds_bd_gvkeys: set[str] | None = None,
+                                       wrds_banks_gvkeys: set[str] | None = None):
     """
-    db = wrds.Connection(wrds_username=config.WRDS_USERNAME)
-    ccm = db.raw_sql(sql_query, date_cols=["linkdt", "linkenddt"])
-    db.close()
-    return ccm
+    Build gvkey lists for PD, BD, Banks, and Cmpust. comparison groups.
+    GE and Sears are excluded from PD; Banks uses time-varying PD exclusion downstream.
+    """
+    link_hist = link_hist.copy()
+    link_hist["gvkey"] = pd.to_numeric(link_hist["gvkey"], errors="coerce")
+    link_hist = link_hist.dropna(subset=["gvkey"])
+    link_hist["gvkey"] = link_hist["gvkey"].astype(int).astype(str).str.zfill(6)
+    link_hist["sic"] = pd.to_numeric(link_hist["sic"], errors="coerce")
 
-def create_comparison_group_linktables(link_hist, merged_main):
-    linked_bd_less_pd = link_hist[((link_hist['sic'] == 6211) | (link_hist['sic'] == 6221))
-                                  & (~link_hist['gvkey'].isin(merged_main['gvkey'].tolist()))]
-    linked_banks_less_pd = link_hist[(link_hist['sic'].isin([6011, 6021, 6022, 6029, 6081, 6082, 6020]))
-                                     & (~link_hist['gvkey'].isin(merged_main['gvkey'].tolist()))]
-    linked_all_less_pd = link_hist[(~link_hist['gvkey'].isin(merged_main['gvkey'].tolist()))]
+    merged_main = merged_main.copy()
+    merged_main["gvkey"] = pd.to_numeric(merged_main["gvkey"], errors="coerce")
+    merged_main = merged_main.dropna(subset=["gvkey"])
+    merged_main["gvkey"] = merged_main["gvkey"].astype(int).astype(str).str.zfill(6)
+
+    pd_df = merged_main[~merged_main["gvkey"].isin(NON_FINANCIAL_PD_GVKEYS)].copy()
+    pd_gvkeys = set(pd_df["gvkey"].tolist())
+
+    if ccm_gvkeys is not None:
+        link_hist = link_hist[link_hist["gvkey"].isin(ccm_gvkeys)].copy()
+
+    if wrds_bd_gvkeys is not None:
+        bd_universe = wrds_bd_gvkeys - pd_gvkeys
+        if ccm_gvkeys is not None:
+            bd_universe = bd_universe & ccm_gvkeys
+        linked_bd_less_pd = pd.DataFrame({"gvkey": sorted(bd_universe)})
+    else:
+        linked_bd_less_pd = link_hist[
+            (link_hist["sic"].isin([6211, 6221])) & (~link_hist["gvkey"].isin(pd_gvkeys))
+        ]
+
+    if wrds_banks_gvkeys is not None:
+        # Time-varying exclusion applied downstream; do NOT statically subtract pd_gvkeys.
+        banks_universe = wrds_banks_gvkeys
+        if ccm_gvkeys is not None:
+            banks_universe = banks_universe & ccm_gvkeys
+        linked_banks_less_pd = pd.DataFrame({"gvkey": sorted(banks_universe)})
+    else:
+        linked_banks_less_pd = link_hist[
+            (link_hist["sic"].isin([6011, 6020, 6021, 6022, 6029, 6081, 6082]))
+            & (~link_hist["gvkey"].isin(pd_gvkeys))
+        ]
+
+    if ccm_gvkeys is not None:
+        linked_all_less_pd = pd.DataFrame({"gvkey": sorted(ccm_gvkeys - pd_gvkeys)})
+    else:
+        linked_all_less_pd = link_hist[~link_hist["gvkey"].isin(pd_gvkeys)]
+
     return {
         "BD": linked_bd_less_pd,
         "Banks": linked_banks_less_pd,
         "Cmpust.": linked_all_less_pd,
-        "PD": merged_main
+        "PD": pd_df,
     }
+
 
 def pull_data_for_all_comparison_groups(db, comparison_group_dict, UPDATED=False):
     datasets = {}
     for key, linktable in comparison_group_dict.items():
-        ITERATE = (key == 'PD')
+        ITERATE = (key == "PD")
         if not UPDATED:
-            ds = get_comparison_group_data(db, linktable, config.START_DATE, config.END_DATE, ITERATE=ITERATE)
+            ds = fetch_financial_data(
+                db, linktable, config.START_DATE, config.END_DATE, ITERATE=ITERATE
+            )
         else:
             if pd.to_datetime(config.UPDATED_END_DATE) > datetime.now():
-                UPDATED_END_DATE = datetime.now().strftime('%Y-%m-%d')
+                UPDATED_END_DATE = datetime.now().strftime("%Y-%m-%d")
             else:
                 UPDATED_END_DATE = config.UPDATED_END_DATE
-            ds = get_comparison_group_data(db, linktable, config.START_DATE, UPDATED_END_DATE, ITERATE=ITERATE)
+            ds = fetch_financial_data(
+                db, linktable, config.START_DATE, UPDATED_END_DATE, ITERATE=ITERATE
+            )
         datasets[key] = ds.drop_duplicates()
     return datasets
 
+
+# Data Processing
+
 def prep_datasets(datasets):
-    prepped_datasets = {}
-    key_cols = ['total_assets', 'book_debt', 'book_equity', 'market_equity']
+    """Convert raw fundq pulls into quarterly sector totals. Used by the test suite."""
+    prepped = {}
     for group_name, df in datasets.items():
-        if 'datadate' in df.columns:
-            df['datadate'] = pd.to_datetime(df['datadate'])
-            df['datadate'] = df['datadate'].dt.to_period('Q').dt.to_timestamp()
-            for col in key_cols:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-            df[key_cols] = df[key_cols].fillna(df[key_cols].mean())
-        else:
-            print(f"'datadate' column not found for group {group_name}")
-        grouped = df.groupby('datadate').agg({c: 'sum' for c in key_cols}).reset_index()
-        prepped_datasets[group_name] = grouped
-    return prepped_datasets
+        if df is None or df.empty:
+            prepped[group_name] = pd.DataFrame(columns=["datadate"] + KEY_COLS)
+            continue
+        df = df.copy()
+        df["datadate"] = pd.to_datetime(df["datadate"], errors="coerce")
+        df = df.dropna(subset=["datadate"])
+        for c in KEY_COLS:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        prepped[group_name] = (
+            df.groupby("datadate", as_index=False)[KEY_COLS]
+              .sum(min_count=1)
+              .sort_values("datadate")
+        )
+    return prepped
+
+
+def build_monthly_sector_totals_from_fundq(raw_df: pd.DataFrame,
+                                           start: str,
+                                           end: str,
+                                           key_cols=KEY_COLS,
+                                           ffill_limit: int | None = None,
+                                           pre_start_quarters: int = 1,
+                                           exclude_active_pd: pd.DataFrame | None = None,
+                                           ) -> pd.DataFrame:
+    """
+    Convert firm-level fundq data into month-end sector totals. Resamples each
+    firm to monthly frequency (forward-fill), then sums across firms by month.
+    Includes one extra quarter before start so the first months have a seed value.
+    """
+    df = raw_df.copy()
+    df["datadate"] = pd.to_datetime(df["datadate"], errors="coerce")
+    df = df.dropna(subset=["gvkey", "datadate"])
+    df["gvkey"] = df["gvkey"].astype(str).str.zfill(6)
+    for c in key_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    start_dt = pd.to_datetime(start)
+    end_dt = pd.to_datetime(end)
+    pre_start_dt = start_dt - pd.DateOffset(months=pre_start_quarters * 3)
+    df = df.loc[(df["datadate"] >= pre_start_dt) & (df["datadate"] <= end_dt)]
+
+    # Prefer FS over INDL when both exist for the same gvkey-date ('FS' < 'INDL').
+    if "indfmt" in df.columns:
+        df = df.sort_values(["gvkey", "datadate", "indfmt"])
+        df = df.drop_duplicates(subset=["gvkey", "datadate"], keep="first")
+    else:
+        df = df.sort_values(["gvkey", "datadate"])
+        df = df.drop_duplicates(subset=["gvkey", "datadate"], keep="last")
+
+    monthly_firm = (
+        df.set_index("datadate")
+          .groupby("gvkey")[key_cols]
+          .resample("ME")
+          .ffill(limit=ffill_limit)
+          .reset_index()
+    )
+
+    # Zero out a PD gvkey's contribution during its active PD months only.
+    if exclude_active_pd is not None and not exclude_active_pd.empty:
+        excl = exclude_active_pd.rename(columns={"mdate": "datadate"}).copy()
+        excl["_exclude"] = True
+        monthly_firm = monthly_firm.merge(excl, on=["gvkey", "datadate"], how="left")
+        mask = monthly_firm["_exclude"].fillna(False)
+        for c in key_cols:
+            monthly_firm.loc[mask, c] = np.nan
+        monthly_firm = monthly_firm.drop(columns=["_exclude"])
+
+    sector = (
+        monthly_firm.groupby("datadate")[key_cols]
+                    .sum(min_count=1)
+                    .reset_index()
+                    .rename(columns={"datadate": "mdate"})
+    )
+
+    idx = pd.date_range(start_dt, end_dt, freq="ME")
+    sector = sector.set_index("mdate").reindex(idx).rename_axis("mdate").reset_index()
+    return sector
+
+
+def build_all_monthly_totals(ds: dict[str, pd.DataFrame],
+                              start: str,
+                              end: str,
+                              banks_pd_active_schedule: pd.DataFrame | None = None,
+                              ) -> dict[str, pd.DataFrame]:
+    """Convert firm-level fundq pulls for each group into month-end sector totals."""
+    out = {}
+    for k, raw in ds.items():
+        excl = banks_pd_active_schedule if k == "Banks" else None
+        out[k] = build_monthly_sector_totals_from_fundq(raw, start, end,
+                                                        exclude_active_pd=excl)
+    return out
+
+
+# Ratio Computation (legacy — used by test suite)
 
 def create_ratios_for_table(prepped_datasets, UPDATED=False):
+    """Compute period-average ratios from quarterly totals. Used by the test suite."""
     if not UPDATED:
         sample_periods = [
-            ('1960-01-01', '2012-12-31'),
-            ('1960-01-01', '1990-12-31'),
-            ('1990-01-01', '2012-12-31')
+            ("1960-01-01", "2012-12-31"),
+            ("1960-01-01", "1990-12-31"),
+            ("1990-01-01", "2012-12-31"),
         ]
+        global_end = "2012-12-31"
     else:
         sample_periods = [
-            ('1960-01-01', '2025-01-01'),
-            ('1960-01-01', '1990-12-31'),
-            ('1990-01-01', '2025-01-01')
+            ("1960-01-01", "2025-01-01"),
+            ("1960-01-01", "1990-12-31"),
+            ("1990-01-01", "2025-01-01"),
         ]
-    pd_df = prepped_datasets['PD']
-    pd_df['datadate'] = pd.to_datetime(pd_df['datadate'])
-    pd_df.index = pd_df['datadate']
+        global_end = "2025-01-01"
 
-    ratio_frames = {}
-    filtered_pd = {}
-    for period in sample_periods:
-        start_date, end_date = map(lambda d: datetime.strptime(d, '%Y-%m-%d'), period)
-        sub = pd_df.copy()[start_date: end_date]
-        ratio_frames[period] = pd.DataFrame(index=sub.index)
-        filtered_pd[period] = sub
+    def to_monthly_asof(q_totals, start="1960-01-01", end=global_end):
+        q = q_totals.copy()
+        q["datadate"] = pd.to_datetime(q["datadate"])
+        q = q.sort_values("datadate")
+        m = pd.DataFrame({"qdate": pd.date_range(start=start, end=end, freq="ME")})
+        out = pd.merge_asof(
+            m.sort_values("qdate"), q,
+            left_on="qdate", right_on="datadate",
+            direction="backward", allow_exact_matches=True,
+        )
+        return out.dropna(subset=["datadate"]).drop(columns=["datadate"])
 
-    for grp_name, grp_df in prepped_datasets.items():
-        if grp_name == 'PD':
-            continue
-        grp_df['datadate'] = pd.to_datetime(grp_df['datadate'])
-        grp_df.index = grp_df['datadate']
-        for period in sample_periods:
-            start_date, end_date = period
-            sub = grp_df[start_date:end_date]
-            for c in ['total_assets', 'book_debt', 'book_equity', 'market_equity']:
-                sum_col = filtered_pd[period][c] + sub[c]
-                sum_col = sum_col.replace(0, np.nan)
-                ratio_frames[period][f'{c}_{grp_name}'] = filtered_pd[period][c] / sum_col
+    monthly = {}
+    for g in ["PD", "BD", "Banks", "Cmpust."]:
+        if g not in prepped_datasets:
+            raise KeyError(f"Missing group {g} in prepped_datasets.")
+        monthly[g] = to_monthly_asof(prepped_datasets[g])
 
-    combined = pd.DataFrame()
-    for period, df in ratio_frames.items():
-        start_date, end_date = map(lambda d: datetime.strptime(d, '%Y-%m-%d'), period)
-        df['Period'] = f"{start_date.year}-{end_date.year}"
-        combined = pd.concat([combined, df])
-    return combined
+    ratio_df = monthly["PD"][["qdate"]].copy().set_index("qdate")
 
-def format_final_table(table, UPDATED=False):
-    table = table.groupby('Period').mean()
-    all_cols = [
-        'total_assets_BD','total_assets_Banks','total_assets_Cmpust.',
-        'book_debt_BD','book_debt_Banks','book_debt_Cmpust.',
-        'book_equity_BD','book_equity_Banks','book_equity_Cmpust.',
-        'market_equity_BD','market_equity_Banks','market_equity_Cmpust.'
-    ]
-    grouped_table = table[all_cols]
-    grouped_table = grouped_table.reset_index()
+    for grp in ["BD", "Banks", "Cmpust."]:
+        denom = (
+            monthly["PD"][KEY_COLS].set_index(monthly["PD"]["qdate"])
+            + monthly[grp][KEY_COLS].set_index(monthly[grp]["qdate"])
+        )
+        num = monthly["PD"][KEY_COLS].set_index(monthly["PD"]["qdate"])
+        for c in KEY_COLS:
+            ratio_df[f"{c}_{grp}"] = num[c] / denom[c].replace(0, np.nan)
 
-    mapping = {
-        'total_assets_Banks':('Total assets','Banks'),
-        'total_assets_BD':('Total assets','BD'),
-        'total_assets_Cmpust.':('Total assets','Cmpust.'),
-        'book_debt_Banks':('Book debt','Banks'),
-        'book_debt_BD':('Book debt','BD'),
-        'book_debt_Cmpust.':('Book debt','Cmpust.'),
-        'book_equity_Banks':('Book equity','Banks'),
-        'book_equity_BD':('Book equity','BD'),
-        'book_equity_Cmpust.':('Book equity','Cmpust.'),
-        'market_equity_Banks':('Market equity','Banks'),
-        'market_equity_BD':('Market equity','BD'),
-        'market_equity_Cmpust.':('Market equity','Cmpust.')
-    }
-    import pandas as pd
-    multiindex = pd.MultiIndex.from_tuples(
-        [mapping[c] for c in all_cols],
-        names=['Metric','Source']
-    )
-    final_df = pd.DataFrame(
-        grouped_table.drop('Period', axis=1).values,
-        index=grouped_table['Period'],
-        columns=multiindex
-    )
+    out = []
+    for (s, e) in sample_periods:
+        sdt, edt = pd.to_datetime(s), pd.to_datetime(e)
+        sub = ratio_df.loc[(ratio_df.index >= sdt) & (ratio_df.index <= edt)].copy()
+        means = sub.mean(numeric_only=True)
+        means["Period"] = f"{sdt.year}-{edt.year}"
+        out.append(means)
 
-    if UPDATED:
-        new_order = ['1960-2025','1960-1990','1990-2025']
-    else:
-        new_order = ['1960-2012','1960-1990','1990-2012']
-    final_df = final_df.reindex(new_order)
-    return final_df
+    return pd.DataFrame(out).set_index("Period").reset_index()
+
+
+# Output
 
 def convert_and_export_table_to_latex(formatted_table, UPDATED=False):
-    """
-    Exports the final ratio table as LaTeX, writing to config.OUTPUT_DIR.
-    We do a string replacement to escape underscores, preventing LaTeX underscore errors.
-    """
-    # Generate LaTeX from DataFrame
-    latex = formatted_table.to_latex(index=True, column_format='lcccccccccccc', float_format="%.3f")
-    
-    # -------------------------------------------------------------------
-    #  Escape underscores to prevent LaTeX from treating them as subscripts
+    latex = formatted_table.to_latex(
+        index=True, column_format="lcccccccccccc", float_format="%.3f"
+    )
     latex = latex.replace("_", "\\_")
-    # -------------------------------------------------------------------
-
-    if UPDATED:
-        caption = "Original"
-        fname = "updated_table02.tex"
-    else:
-        caption = "Updated"
-        fname = "table02.tex"
-
+    caption = "Original" if not UPDATED else "Updated"
+    fname = "table02_fixed.tex" if not UPDATED else "updated_table02_fixed.tex"
     wrapper = rf"""
-    \begin{{table}}[htbp]
-    \centering
-    \caption{{{caption}}}
-    \label{{tab:Table 2}}
-    \small
-    {latex}
-    \end{{table}}
-    """
+\begin{{table}}[htbp]
+\centering
+\caption{{{caption}}}
+\label{{tab:Table 2}}
+\small
+{latex}
+\end{{table}}
+"""
     outpath = config.OUTPUT_DIR / fname
-    with open(outpath, 'w', encoding='utf-8') as f:
+    with open(outpath, "w", encoding="utf-8") as f:
         f.write(wrapper)
     print(f"Table 02 LaTeX saved to: {outpath}")
 
-def main(UPDATED=False):
-    db = wrds.Connection(wrds_username=config.WRDS_USERNAME)
-    merged_main = clean_primary_dealers_data(fname='Primary_Dealer_Link_Table3.csv')
-    link_hist = load_link_table(fname='updated_linktable.csv')
-    group_links = create_comparison_group_linktables(link_hist, merged_main)
 
-    ds = pull_data_for_all_comparison_groups(db, group_links, UPDATED=UPDATED)
-    pds = prep_datasets(ds)
+# Main
+
+def main(UPDATED=False):
+    PULLED_DIR = config.DATA_DIR / "pulled"
+    merged_main = clean_primary_dealers_data(fname="Primary_Dealer_Link_Table3_DOMESTIC.csv")
+
+    ds = {
+        "PD":      pd.read_parquet(PULLED_DIR / "table02_raw_PD.parquet"),
+        "BD":      pd.read_parquet(PULLED_DIR / "table02_raw_BD.parquet"),
+        "Banks":   pd.read_parquet(PULLED_DIR / "table02_raw_Banks.parquet"),
+        "Cmpust.": pd.read_parquet(PULLED_DIR / "table02_raw_Cmpust.parquet"),
+    }
+
+    end = config.END_DATE if not UPDATED else config.UPDATED_END_DATE
+
+    pd_active_schedule = build_pd_active_schedule(merged_main, config.START_DATE, end)
+    monthly_totals = build_all_monthly_totals(
+        ds, config.START_DATE, end, banks_pd_active_schedule=pd_active_schedule
+    )
+    ratios = Table02Analysis.compute_table2_ratios(monthly_totals, config.START_DATE, end)
 
     Table02Analysis.create_summary_stat_table_for_data(ds, UPDATED=UPDATED)
-    ratio_df = create_ratios_for_table(pds, UPDATED=UPDATED)
-    Table02Analysis.create_figure_for_data(ratio_df, UPDATED=UPDATED)
-    Table02Analysis.create_corr_matrix_for_data(ds, UPDATED=UPDATED)  # <-- This also produces .tex with underscores
-    formatted = format_final_table(ratio_df, UPDATED=UPDATED)
-    convert_and_export_table_to_latex(formatted, UPDATED=UPDATED)
-    return formatted
+    Table02Analysis.create_figure_for_data(ratios, UPDATED=UPDATED)
+    Table02Analysis.create_corr_matrix_for_data(ds, UPDATED=UPDATED)
+    final = Table02Analysis.summarize_table2(ratios, UPDATED=UPDATED)
+
+    convert_and_export_table_to_latex(final, UPDATED=UPDATED)
+    return final
+
 
 if __name__ == "__main__":
     main(UPDATED=False)
